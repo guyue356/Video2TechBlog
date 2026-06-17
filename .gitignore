@@ -1,0 +1,18 @@
+.env
+storage/
+backend/storage/
+__pycache__/
+*.pyc
+node_modules/
+.next/
+
+# Dependencies installed flag
+.deps_installed
+
+# Debug logs
+*.log
+backend/*.log
+
+# SQLite databases
+*.db
+backend/*.db

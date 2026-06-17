@@ -1,0 +1,12 @@
+fastapi
+uvicorn
+python-multipart
+sqlalchemy
+aiosqlite
+faster-whisper
+openai
+sse-starlette
+aiofiles
+pydantic
+python-dotenv
+mistune
