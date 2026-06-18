@@ -411,35 +411,6 @@ async def export_markdown(req: ExportRequest):
         return ExportResponse(filename=filename, content=blog.markdown)
 
 
-@app.post("/api/export/html")
-async def export_html(req: ExportRequest):
-    async with async_session() as db:
-        result = await db.execute(
-            select(Blog).where(Blog.video_id == req.video_id).order_by(Blog.id.desc())
-        )
-        blog = result.scalar_one_or_none()
-        if not blog:
-            return JSONResponse({"error": "Blog not found"}, status_code=404)
-        import mistune
-        html_body = blog.html or mistune.html(blog.markdown)
-        html_content = (
-            "<!DOCTYPE html>\n<html lang=\"zh-CN\">\n<head>\n"
-            "<meta charset=\"utf-8\">\n"
-            f"<title>{blog.title or 'Blog'}</title>\n"
-            "<style>body{max-width:800px;margin:0 auto;padding:2rem;"
-            "font-family:system-ui,sans-serif;line-height:1.8;color:#1a1a1a;}"
-            "pre{background:#f4f4f4;padding:1rem;border-radius:6px;overflow-x:auto;}"
-            "code{font-family:monospace;font-size:0.9em;}"
-            "img{max-width:100%%;}</style>\n</head>\n<body>\n"
-            f"{html_body}\n</body>\n</html>"
-        )
-        filename = f"{blog.title or 'blog'}.html"
-        out_path = OUTPUT_DIR / filename
-        async with aiofiles.open(out_path, "w", encoding="utf-8") as f:
-            await f.write(html_content)
-        return ExportResponse(filename=filename, content=html_content)
-
-
 @app.get("/api/concepts")
 async def get_concepts(video_id: str = ""):
     async with async_session() as db:

@@ -515,24 +515,6 @@ export default function Home() {
     }
   };
 
-  const handleExportHtml = async () => {
-    if (!taskId || !blogId) return;
-    const res = await fetch(`${API_BASE}/api/export/html`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ video_id: taskId }),
-    });
-    if (res.ok) {
-      const data = await res.json();
-      const blob = new Blob([data.content], { type: "text/html" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url;
-      a.download = data.filename || "blog.html";
-      a.click();
-    }
-  };
-
   const handleExportSrt = async () => {
     if (!taskId) return;
     const res = await fetch(`${API_BASE}/api/export/srt`, {
@@ -1464,7 +1446,6 @@ export default function Home() {
                       <h3 className="text-lg font-semibold">生成的博客</h3>
                       <div className="flex gap-2">
                         <button onClick={handleExportMd} disabled={!blogId} className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 rounded-lg text-sm font-medium transition-colors">导出 .md</button>
-                        <button onClick={handleExportHtml} disabled={!blogId} className="px-3 py-1.5 bg-green-600 hover:bg-green-500 disabled:opacity-40 rounded-lg text-sm font-medium transition-colors">导出 .html</button>
                       </div>
                     </div>
                     {blogTitle && <h1 className="text-2xl font-bold mb-4">{blogTitle}</h1>}

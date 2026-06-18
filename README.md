@@ -35,7 +35,7 @@
 | 🧠 知识提取 | 结构化提取 7 类知识：概念、框架、方法、工具、论文、代码示例、洞见 |
 | ✍️ 博客生成 | 流式生成中文技术博客，实时打字机效果 |
 | 📊 实时进度 | SSE 推送每个步骤的进度、状态和中间结果 |
-| 📤 多格式导出 | Markdown、HTML（带样式）、SRT 字幕、纯文本、JSON |
+| 📤 多格式导出 | Markdown、SRT 字幕、纯文本、JSON |
 | 🔄 任务管理 | 支持取消、重新处理，视频资产列表管理 |
 
 ---
@@ -332,7 +332,6 @@ npm run dev
 
 博客支持多种格式导出：
 - **Markdown** (.md) — 原始 Markdown 文件
-- **HTML** (.html) — 带完整样式的 HTML 页面
 - **SRT** (.srt) — 字幕文件
 - **TXT** (.txt) — 纯文本转录
 - **JSON** (.json) — 任意阶段的结构化数据
@@ -386,7 +385,6 @@ npm run dev
 | `GET` | `/api/video/{id}` | 获取原始视频文件 |
 | `GET` | `/api/audio/{id}` | 获取音频文件 |
 | `POST` | `/api/export/md` | 导出 Markdown |
-| `POST` | `/api/export/html` | 导出 HTML |
 | `POST` | `/api/export/srt` | 导出 SRT 字幕 |
 
 ### SSE 事件类型
