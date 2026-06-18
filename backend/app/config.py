@@ -21,7 +21,8 @@ WHISPER_MODEL_SIZE = "large-v3"
 def _detect_whisper_device():
     try:
         import ctranslate2
-        if "cuda" in ctranslate2.get_supported_compute_types("cuda"):
+        types = ctranslate2.get_supported_compute_types("cuda")
+        if types:  # non-empty set means CUDA is available
             return "cuda", "int8_float16"
     except Exception:
         pass

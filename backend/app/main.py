@@ -510,6 +510,25 @@ async def serve_audio(video_id: str):
                         filename=f"{video_id}.wav")
 
 
+@app.get("/api/video/{video_id}")
+async def serve_video(video_id: str):
+    """Serve the original video file."""
+    # Find video file with any common extension
+    for ext in [".mp4", ".mkv", ".avi", ".mov", ".webm"]:
+        video_path = VIDEOS_DIR / f"{video_id}{ext}"
+        if video_path.exists():
+            media_type = {
+                ".mp4": "video/mp4",
+                ".mkv": "video/x-matroska",
+                ".avi": "video/x-msvideo",
+                ".mov": "video/quicktime",
+                ".webm": "video/webm",
+            }.get(ext, "video/mp4")
+            return FileResponse(str(video_path), media_type=media_type,
+                                filename=f"{video_id}{ext}")
+    return JSONResponse({"error": "Video not found"}, status_code=404)
+
+
 @app.post("/api/export/srt")
 async def export_srt(req: ExportRequest):
     async with async_session() as db:

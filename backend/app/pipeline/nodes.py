@@ -189,12 +189,15 @@ async def transcribe(state):
     task_id = state["task_id"]
     audio_path = state["audio_path"]
     duration = state.get("duration", 0)
+    # Convert empty string to None for auto language detection
+    language = WHISPER_LANGUAGE if WHISPER_LANGUAGE else None
+    lang_display = language.upper() if language else "Auto"
     await sse_manager.emit(task_id, "step_start",
         {"step": "transcribe",
-         "message": f"Transcribing audio with Whisper ({WHISPER_DEVICE.upper()}, {WHISPER_MODEL_SIZE})..."})
+         "message": f"Transcribing audio with Whisper ({WHISPER_DEVICE.upper()}, {WHISPER_MODEL_SIZE}, {lang_display})..."})
 
     result = await _run_in_thread(
-        _whisper_transcribe, audio_path, WHISPER_LANGUAGE
+        _whisper_transcribe, audio_path, language
     )
     full_text, seg_list, language = result
 

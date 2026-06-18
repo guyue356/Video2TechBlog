@@ -33,9 +33,10 @@ interface StepState {
   result: unknown;
 }
 
-type TabKey = "audio" | "transcript" | "chapters" | "knowledge" | "blog";
+type TabKey = "video" | "audio" | "transcript" | "chapters" | "knowledge" | "blog";
 
 const TAB_LABELS: Record<TabKey, string> = {
+  video: "视频",
   audio: "音频",
   transcript: "转录",
   chapters: "章节",
@@ -44,6 +45,7 @@ const TAB_LABELS: Record<TabKey, string> = {
 };
 
 const TAB_ICONS: Record<TabKey, string> = {
+  video: "🎬",
   audio: "♫",
   transcript: "✎",
   chapters: "☰",
@@ -135,7 +137,7 @@ export default function Home() {
   const [blogId, setBlogId] = useState<number | null>(null);
   const [error, setError] = useState("");
   const [phase, setPhase] = useState<"upload" | "processing" | "done">("upload");
-  const [activeTab, setActiveTab] = useState<TabKey>("blog");
+  const [activeTab, setActiveTab] = useState<TabKey>("video");
   const [stageData, setStageData] = useState<Record<string, Record<string, unknown>>>({});
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [elapsed, setElapsed] = useState(0);
@@ -149,7 +151,7 @@ export default function Home() {
   const [assetSearch, setAssetSearch] = useState("");
   const [assetStatusFilter, setAssetStatusFilter] = useState("");
   const [selectedVideo, setSelectedVideo] = useState<VideoDetail | null>(null);
-  const [assetDetailTabs, setAssetDetailTabs] = useState<TabKey>("blog");
+  const [assetDetailTabs, setAssetDetailTabs] = useState<TabKey>("video");
   const [assetStageData, setAssetStageData] = useState<Record<string, Record<string, unknown>>>({});
   const [assetAudioUrl, setAssetAudioUrl] = useState<string | null>(null);
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
@@ -832,6 +834,25 @@ export default function Home() {
 
         {/* Tab panels */}
         <div className="bg-zinc-50 border border-zinc-200 rounded-lg p-6 min-h-[400px]">
+          {assetDetailTabs === "video" && (
+            <div>
+              <h3 className="text-lg font-semibold mb-4">原始视频</h3>
+              <div className="bg-zinc-100 rounded-lg p-4">
+                <video
+                  controls
+                  className="w-full max-h-[60vh] rounded"
+                  src={`${API_BASE}/api/video/${v.task_id}`}
+                >
+                  您的浏览器不支持视频播放
+                </video>
+                <div className="flex items-center gap-4 mt-3 text-xs text-zinc-500">
+                  <span>文件: {v.filename}</span>
+                  <span>时长: {formatDuration(v.duration)}</span>
+                </div>
+              </div>
+            </div>
+          )}
+
           {assetDetailTabs === "audio" && (
             <div>
               <h3 className="text-lg font-semibold mb-4">音频</h3>
@@ -1285,6 +1306,26 @@ export default function Home() {
               </div>
 
               <div className="bg-zinc-50 border border-zinc-200 rounded-lg p-6 min-h-[400px]">
+                {activeTab === "video" && (
+                  <div>
+                    <h3 className="text-lg font-semibold mb-4">原始视频</h3>
+                    <div className="bg-zinc-100 rounded-lg p-4">
+                      <video
+                        controls
+                        className="w-full max-h-[60vh] rounded"
+                        src={taskId ? `${API_BASE}/api/video/${taskId}` : undefined}
+                      >
+                        您的浏览器不支持视频播放
+                      </video>
+                      {taskId && (
+                        <div className="flex items-center gap-4 mt-3 text-xs text-zinc-500">
+                          <span>视频 ID: {taskId}</span>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
                 {activeTab === "audio" && (
                   <div>
                     <div className="flex items-center justify-between mb-4">
