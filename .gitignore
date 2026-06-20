@@ -16,3 +16,5 @@ backend/*.log
 # SQLite databases
 *.db
 backend/*.db
+
+Assets/

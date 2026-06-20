@@ -2,6 +2,8 @@
 
 import { useState, useRef, useCallback, useEffect } from "react";
 import dynamic from "next/dynamic";
+import { useStageData, type TabKey } from "./useStageData";
+import StageViewer from "./StageViewer";
 
 const MarkdownRenderer = dynamic(() => import("./MarkdownRenderer"), {
   loading: () => <div className="animate-pulse h-64 bg-zinc-100 rounded-lg" />,
@@ -32,26 +34,6 @@ interface StepState {
   message: string;
   result: unknown;
 }
-
-type TabKey = "video" | "audio" | "transcript" | "chapters" | "knowledge" | "blog";
-
-const TAB_LABELS: Record<TabKey, string> = {
-  video: "视频",
-  audio: "音频",
-  transcript: "转录",
-  chapters: "章节",
-  knowledge: "知识",
-  blog: "博客",
-};
-
-const TAB_ICONS: Record<TabKey, string> = {
-  video: "🎬",
-  audio: "♫",
-  transcript: "✎",
-  chapters: "☰",
-  knowledge: "★",
-  blog: "✍",
-};
 
 interface VideoItem {
   task_id: string;
@@ -133,27 +115,26 @@ export default function Home() {
   const [chapters, setChapters] = useState<Array<Record<string, unknown>>>([]);
   const [knowledge, setKnowledge] = useState<Record<string, unknown>>({});
   const [blogMd, setBlogMd] = useState("");
-  const [blogTitle, setBlogTitle] = useState("");
   const [blogId, setBlogId] = useState<number | null>(null);
   const [error, setError] = useState("");
   const [phase, setPhase] = useState<"upload" | "processing" | "done">("upload");
   const [activeTab, setActiveTab] = useState<TabKey>("video");
-  const [stageData, setStageData] = useState<Record<string, Record<string, unknown>>>({});
-  const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [elapsed, setElapsed] = useState(0);
   const elapsedRef = useRef(0);
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const readerRef = useRef<EventSource | null>(null);
 
+  // Shared stage data hooks (one for "done" phase, one for asset detail)
+  const doneStage = useStageData();
+  const detailStage = useStageData();
+
   // Asset management state
   const [videoList, setVideoList] = useState<VideoItem[]>([]);
   const [assetSearch, setAssetSearch] = useState("");
   const [assetStatusFilter, setAssetStatusFilter] = useState("");
   const [selectedVideo, setSelectedVideo] = useState<VideoDetail | null>(null);
-  const [assetDetailTabs, setAssetDetailTabs] = useState<TabKey>("video");
-  const [assetStageData, setAssetStageData] = useState<Record<string, Record<string, unknown>>>({});
-  const [assetAudioUrl, setAssetAudioUrl] = useState<string | null>(null);
+  const [assetDetailTab, setAssetDetailTab] = useState<TabKey>("video");
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const [loadingAssets, setLoadingAssets] = useState(false);
 
@@ -193,32 +174,14 @@ export default function Home() {
       if (res.ok) {
         const detail: VideoDetail = await res.json();
         setSelectedVideo(detail);
-        setAssetDetailTabs("blog");
-        setAssetStageData({});
-        setAssetAudioUrl(null);
-
-        // Fetch stage data
-        const stages: TabKey[] = ["audio", "transcript", "chapters", "knowledge"];
-        for (const stage of stages) {
-          fetch(`${API_BASE}/api/stage/${videoId}/${stage}`)
-            .then((r) => (r.ok ? r.json() : null))
-            .then((d) => {
-              if (d?.data) {
-                setAssetStageData((prev) => ({ ...prev, [stage]: d.data }));
-              }
-            })
-            .catch(() => {});
+        setAssetDetailTab("blog");
+        detailStage.reset();
+        if (detail.status === "completed") {
+          detailStage.fetchStageData(videoId);
         }
-        // Fetch audio
-        fetch(`${API_BASE}/api/audio/${videoId}`)
-          .then((r) => (r.ok ? r.blob() : null))
-          .then((blob) => {
-            if (blob) setAssetAudioUrl(URL.createObjectURL(blob));
-          })
-          .catch(() => {});
       }
     } catch { /* ignore */ }
-  }, []);
+  }, [detailStage]);
 
   // Delete a video
   const handleDelete = useCallback(async (videoId: string) => {
@@ -228,11 +191,12 @@ export default function Home() {
         setDeleteConfirm(null);
         if (selectedVideo?.task_id === videoId) {
           setSelectedVideo(null);
+          detailStage.reset();
         }
         fetchVideoList();
       }
     } catch { /* ignore */ }
-  }, [selectedVideo, fetchVideoList]);
+  }, [selectedVideo, fetchVideoList, detailStage]);
 
   // Reprocess a video
   const handleReprocess = useCallback(async (videoId: string) => {
@@ -243,57 +207,18 @@ export default function Home() {
         setPhase("processing");
         setTaskId(videoId);
         setSelectedVideo(null);
+        detailStage.reset();
         initSteps();
         setTranscript("");
         setChapters([]);
         setKnowledge({});
         setBlogMd("");
-        setBlogTitle("");
         setBlogId(null);
         setActiveTab("blog");
-        setStageData({});
-        setAudioUrl(null);
+        doneStage.reset();
       }
     } catch { /* ignore */ }
-  }, [initSteps]);
-
-  // Load an existing completed video into the "done" phase viewer
-  const handleViewInMain = useCallback(async (videoId: string) => {
-    try {
-      const res = await fetch(`${API_BASE}/api/videos/${videoId}`);
-      if (!res.ok) return;
-      const detail: VideoDetail = await res.json();
-      if (detail.status !== "completed" || !detail.blog) return;
-
-      setTaskId(videoId);
-      setBlogMd(detail.blog.markdown);
-      setBlogTitle(detail.blog.title);
-      setBlogId(detail.blog.id);
-      setPhase("done");
-      setActiveTab("blog");
-      setView("upload");
-      setSelectedVideo(null);
-      setStageData({});
-      setAudioUrl(null);
-
-      // Fetch stage data
-      const stages: TabKey[] = ["audio", "transcript", "chapters", "knowledge"];
-      for (const stage of stages) {
-        fetch(`${API_BASE}/api/stage/${videoId}/${stage}`)
-          .then((r) => (r.ok ? r.json() : null))
-          .then((d) => {
-            if (d?.data) setStageData((prev) => ({ ...prev, [stage]: d.data }));
-          })
-          .catch(() => {});
-      }
-      fetch(`${API_BASE}/api/audio/${videoId}`)
-        .then((r) => (r.ok ? r.blob() : null))
-        .then((blob) => {
-          if (blob) setAudioUrl(URL.createObjectURL(blob));
-        })
-        .catch(() => {});
-    } catch { /* ignore */ }
-  }, []);
+  }, [initSteps, doneStage, detailStage]);
 
   const handleUpload = async (file: File) => {
     setUploading(true);
@@ -306,12 +231,10 @@ export default function Home() {
     setChapters([]);
     setKnowledge({});
     setBlogMd("");
-    setBlogTitle("");
     setBlogId(null);
     setPhase("processing");
     setActiveTab("blog");
-    setStageData({});
-    setAudioUrl(null);
+    doneStage.reset();
 
     const formData = new FormData();
     formData.append("file", file);
@@ -426,9 +349,6 @@ export default function Home() {
         if (d.step === "extract_knowledge" && d.knowledge) {
           setKnowledge(d.knowledge);
         }
-        if (d.step === "generate_blog") {
-          if (d.title) setBlogTitle(d.title);
-        }
       }
     });
 
@@ -449,6 +369,8 @@ export default function Home() {
       const d = JSON.parse(e.data);
       setBlogId(d.blog_id || null);
       setPhase("done");
+      // Fetch stage data using the hook
+      doneStage.fetchStageData(taskId!);
       es.close();
     });
 
@@ -457,29 +379,7 @@ export default function Home() {
     return () => {
       es.close();
     };
-  }, [taskId, phase, initSteps]);
-
-  // Fetch stage data when entering "done" phase
-  useEffect(() => {
-    if (phase !== "done" || !taskId) return;
-    const stages: TabKey[] = ["audio", "transcript", "chapters", "knowledge"];
-    stages.forEach((stage) => {
-      fetch(`${API_BASE}/api/stage/${taskId}/${stage}`)
-        .then((r) => (r.ok ? r.json() : null))
-        .then((d) => {
-          if (d?.data) {
-            setStageData((prev) => ({ ...prev, [stage]: d.data }));
-          }
-        })
-        .catch(() => {});
-    });
-    fetch(`${API_BASE}/api/audio/${taskId}`)
-      .then((r) => (r.ok ? r.blob() : null))
-      .then((blob) => {
-        if (blob) setAudioUrl(URL.createObjectURL(blob));
-      })
-      .catch(() => {});
-  }, [phase, taskId]);
+  }, [taskId, phase, initSteps, doneStage]);
 
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
@@ -570,9 +470,9 @@ export default function Home() {
   };
 
   const handleDownloadAudio = () => {
-    if (!audioUrl) return;
+    if (!doneStage.audioUrl) return;
     const a = document.createElement("a");
-    a.href = audioUrl;
+    a.href = doneStage.audioUrl;
     a.download = "audio.wav";
     a.click();
   };
@@ -691,17 +591,9 @@ export default function Home() {
                   </div>
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
-                  {v.status === "completed" && v.has_blog && (
-                    <button
-                      onClick={() => handleViewInMain(v.task_id)}
-                      className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 rounded-lg text-xs font-medium transition-colors"
-                    >
-                      查看
-                    </button>
-                  )}
                   <button
                     onClick={() => fetchVideoDetail(v.task_id)}
-                    className="px-3 py-1.5 bg-zinc-200 hover:bg-zinc-300 rounded-lg text-xs font-medium transition-colors"
+                    className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 rounded-lg text-xs font-medium transition-colors"
                   >
                     详情
                   </button>
@@ -732,13 +624,87 @@ export default function Home() {
   const renderAssetDetail = () => {
     if (!selectedVideo) return null;
     const v = selectedVideo;
-    const sd = assetStageData;
+
+    // Export handlers for detail view (use video task_id as id)
+    const detailExportHandlers = v.status === "completed" ? {
+      onExportMd: async () => {
+        const res = await fetch(`${API_BASE}/api/export/md`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ video_id: v.task_id }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          const blob = new Blob([data.content], { type: "text/markdown" });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = data.filename || "blog.md";
+          a.click();
+        }
+      },
+      onExportTxt: async () => {
+        const res = await fetch(`${API_BASE}/api/export/txt`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ video_id: v.task_id }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          const blob = new Blob([data.content], { type: "text/plain" });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = data.filename || "transcript.txt";
+          a.click();
+        }
+      },
+      onExportSrt: async () => {
+        const res = await fetch(`${API_BASE}/api/export/srt`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ video_id: v.task_id }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          const blob = new Blob([data.content], { type: "text/plain" });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = data.filename || "transcript.srt";
+          a.click();
+        }
+      },
+      onExportJson: async (stage: string) => {
+        const res = await fetch(`${API_BASE}/api/export/json`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ video_id: v.task_id, stage }),
+        });
+        if (res.ok) {
+          const data = await res.json();
+          const blob = new Blob([data.content], { type: "application/json" });
+          const url = URL.createObjectURL(blob);
+          const a = document.createElement("a");
+          a.href = url;
+          a.download = data.filename || `${stage}.json`;
+          a.click();
+        }
+      },
+      onDownloadAudio: () => {
+        if (!detailStage.audioUrl) return;
+        const a = document.createElement("a");
+        a.href = detailStage.audioUrl;
+        a.download = "audio.wav";
+        a.click();
+      },
+    } : undefined;
 
     return (
       <div className="max-w-5xl mx-auto">
         <div className="flex items-center gap-3 mb-6">
           <button
-            onClick={() => { setSelectedVideo(null); setAssetStageData({}); setAssetAudioUrl(null); }}
+            onClick={() => { setSelectedVideo(null); detailStage.reset(); }}
             className="px-3 py-1.5 bg-zinc-200 hover:bg-zinc-300 rounded-lg text-sm transition-colors"
           >
             返回
@@ -758,14 +724,6 @@ export default function Home() {
             </div>
           </div>
           <div className="flex gap-2 shrink-0">
-            {v.status === "completed" && (
-              <button
-                onClick={() => handleViewInMain(v.task_id)}
-                className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 rounded-lg text-xs font-medium transition-colors"
-              >
-                在编辑器中打开
-              </button>
-            )}
             <button
               onClick={() => handleReprocess(v.task_id)}
               className="px-3 py-1.5 bg-yellow-50 hover:bg-yellow-100 text-yellow-600 rounded-lg text-xs font-medium transition-colors"
@@ -796,166 +754,28 @@ export default function Home() {
           ))}
         </div>
 
-        {/* Tabs */}
-        <div className="flex gap-1 mb-4 border-b border-zinc-200">
-          {(Object.keys(TAB_LABELS) as TabKey[]).map((key) => (
-            <button
-              key={key}
-              onClick={() => setAssetDetailTabs(key)}
-              className={`px-4 py-2.5 text-sm font-medium rounded-t-lg transition-colors ${
-                assetDetailTabs === key
-                  ? "bg-white text-zinc-900 border-b-2 border-blue-500 shadow-sm"
-                  : "text-zinc-500 hover:text-zinc-700 hover:bg-zinc-200/50"
-              }`}
-            >
-              <span className="mr-1.5">{TAB_ICONS[key]}</span>
-              {TAB_LABELS[key]}
-            </button>
-          ))}
-        </div>
-
-        {/* Tab panels */}
-        <div className="bg-zinc-50 border border-zinc-200 rounded-lg p-6 min-h-[400px]">
-          {assetDetailTabs === "video" && (
-            <div>
-              <h3 className="text-lg font-semibold mb-4">原始视频</h3>
-              <div className="bg-zinc-100 rounded-lg p-4">
-                <video
-                  controls
-                  className="w-full max-h-[60vh] rounded"
-                  src={`${API_BASE}/api/video/${v.task_id}`}
-                >
-                  您的浏览器不支持视频播放
-                </video>
-                <div className="flex items-center gap-4 mt-3 text-xs text-zinc-500">
-                  <span>文件: {v.filename}</span>
-                  <span>时长: {formatDuration(v.duration)}</span>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {assetDetailTabs === "audio" && (
-            <div>
-              <h3 className="text-lg font-semibold mb-4">音频</h3>
-              {assetAudioUrl ? (
-                <div className="bg-zinc-100 rounded-lg p-4">
-                  <audio controls src={assetAudioUrl} className="w-full" />
-                  <p className="text-xs text-zinc-500 mt-2">
-                    时长: {sd.audio?.duration ? `${Number(sd.audio.duration).toFixed(1)}秒` : "无"}
-                  </p>
-                </div>
-              ) : (
-                <p className="text-zinc-500">暂无音频</p>
-              )}
-            </div>
-          )}
-
-          {assetDetailTabs === "transcript" && (
-            <div>
-              <h3 className="text-lg font-semibold mb-4">转录文本</h3>
-              {sd.transcript?.segments ? (
-                <div className="bg-zinc-100 rounded-lg p-4 max-h-[60vh] overflow-y-auto">
-                  <pre className="text-sm text-zinc-700 whitespace-pre-wrap font-mono leading-relaxed">
-                    {(sd.transcript.segments as Array<{start: number; end: number; text: string}>)
-                      .map((s) => `[${s.start.toFixed(1)}秒-${s.end.toFixed(1)}秒] ${s.text}`)
-                      .join("\n")}
-                  </pre>
-                </div>
-              ) : (
-                <p className="text-zinc-500">暂无转录文本</p>
-              )}
-            </div>
-          )}
-
-          {assetDetailTabs === "chapters" && (
-            <div>
-              <h3 className="text-lg font-semibold mb-4">章节</h3>
-              {sd.chapters?.chapters ? (
-                <div className="overflow-x-auto">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b border-zinc-300">
-                        <th className="text-left py-2 px-3 text-zinc-400 font-medium">#</th>
-                        <th className="text-left py-2 px-3 text-zinc-400 font-medium">标题</th>
-                        <th className="text-left py-2 px-3 text-zinc-400 font-medium">时间</th>
-                        <th className="text-left py-2 px-3 text-zinc-400 font-medium">评分</th>
-                        <th className="text-left py-2 px-3 text-zinc-400 font-medium">摘要</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {(sd.chapters.chapters as Array<{title: string; start_time: number; end_time: number; importance_score: number; summary: string}>)
-                        .map((ch, i) => (
-                          <tr key={i} className="border-b border-zinc-200 hover:bg-zinc-200/50">
-                            <td className="py-2 px-3 text-zinc-500">{i + 1}</td>
-                            <td className="py-2 px-3 text-zinc-800 font-medium">{ch.title}</td>
-                            <td className="py-2 px-3 text-zinc-400 font-mono text-xs">{ch.start_time}秒 - {ch.end_time}秒</td>
-                            <td className="py-2 px-3">
-                              <span className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${
-                                ch.importance_score >= 8 ? "bg-red-100 text-red-700"
-                                : ch.importance_score >= 5 ? "bg-yellow-100 text-yellow-700"
-                                : "bg-zinc-300 text-zinc-400"
-                              }`}>{ch.importance_score}</span>
-                            </td>
-                            <td className="py-2 px-3 text-zinc-400 text-xs max-w-xs truncate">{ch.summary}</td>
-                          </tr>
-                        ))}
-                    </tbody>
-                  </table>
-                </div>
-              ) : (
-                <p className="text-zinc-500">暂无章节</p>
-              )}
-            </div>
-          )}
-
-          {assetDetailTabs === "knowledge" && (
-            <div>
-              <h3 className="text-lg font-semibold mb-4">知识提取</h3>
-              {sd.knowledge && Object.keys(sd.knowledge).length > 0 ? (
-                <div className="grid grid-cols-2 gap-4">
-                  {(["concepts", "frameworks", "methods", "tools", "papers", "code_examples", "insights"] as const).map((cat) => {
-                    const items = sd.knowledge[cat] as string[] | undefined;
-                    if (!items || items.length === 0) return null;
-                    return (
-                      <div key={cat} className="bg-zinc-100 border border-zinc-200 rounded-lg p-4">
-                        <h4 className="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-2">
-                          {cat === "concepts" ? "概念" : cat === "frameworks" ? "框架" : cat === "methods" ? "方法" : cat === "tools" ? "工具" : cat === "papers" ? "论文" : cat === "code_examples" ? "代码示例" : "洞察"}
-                        </h4>
-                        <ul className="space-y-1">
-                          {items.map((item, i) => (
-                            <li key={i} className="text-sm text-zinc-700 flex items-start gap-2">
-                              <span className="text-zinc-400 mt-0.5">*</span>
-                              <span>{item}</span>
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    );
-                  })}
-                </div>
-              ) : (
-                <p className="text-zinc-500">暂无知识数据</p>
-              )}
-            </div>
-          )}
-
-          {assetDetailTabs === "blog" && (
-            <div>
-              <h3 className="text-lg font-semibold mb-4">博客</h3>
-              {v.blog ? (
-                <div>
-                  {v.blog.title && <h1 className="text-2xl font-bold mb-4">{v.blog.title}</h1>}
-                  <div className="bg-zinc-100 rounded-lg p-6">
-                    <MarkdownRenderer content={v.blog.markdown} />
-                  </div>
-                </div>
-              ) : (
-                <p className="text-zinc-500">暂无博客</p>
-              )}
-            </div>
-          )}
-        </div>
+        {/* Unified stage viewer with export */}
+        {v.status !== "completed" ? (
+          <div className="text-center py-20 text-zinc-400">
+            <div className="text-4xl mb-4">⏳</div>
+            <p className="text-lg">视频正在处理中...</p>
+            <p className="text-sm mt-2">状态: {STATUS_LABELS[v.status] || v.status}</p>
+          </div>
+        ) : (
+          <StageViewer
+            videoId={v.task_id}
+            filename={v.filename}
+            duration={v.duration}
+            stageData={detailStage.stageData}
+            audioUrl={detailStage.audioUrl}
+            activeTab={assetDetailTab}
+            onTabChange={setAssetDetailTab}
+            showExport={true}
+            blogMarkdown={v.blog?.markdown}
+            blogId={v.blog?.id}
+            exportHandlers={detailExportHandlers}
+          />
+        )}
       </div>
     );
   };
@@ -983,7 +803,7 @@ export default function Home() {
               上传
             </button>
             <button
-              onClick={() => { setView("assets"); setSelectedVideo(null); }}
+              onClick={() => { setView("assets"); setSelectedVideo(null); detailStage.reset(); }}
               className={`px-3 py-1.5 text-sm rounded-md transition-colors ${
                 view === "assets"
                   ? "bg-zinc-900 text-white"
@@ -1253,7 +1073,7 @@ export default function Home() {
             </div>
           )}
 
-          {view === "upload" && phase === "done" && (
+          {view === "upload" && phase === "done" && taskId && (
             <div className="max-w-5xl mx-auto">
               <div className="flex items-center justify-between mb-6">
                 <div>
@@ -1263,202 +1083,30 @@ export default function Home() {
                   </p>
                 </div>
                 <button
-                  onClick={() => { setPhase("upload"); setTaskId(null); }}
+                  onClick={() => { setPhase("upload"); setTaskId(null); doneStage.reset(); }}
                   className="px-4 py-2 bg-zinc-200 hover:bg-zinc-300 rounded-lg text-sm transition-colors"
                 >
                   新建视频
                 </button>
               </div>
 
-              <div className="flex gap-1 mb-4 border-b border-zinc-200">
-                {(Object.keys(TAB_LABELS) as TabKey[]).map((key) => (
-                  <button
-                    key={key}
-                    onClick={() => setActiveTab(key)}
-                    className={`px-4 py-2.5 text-sm font-medium rounded-t-lg transition-colors ${
-                      activeTab === key
-                        ? "bg-white text-zinc-900 border-b-2 border-blue-500 shadow-sm"
-                        : "text-zinc-500 hover:text-zinc-700 hover:bg-zinc-200/50"
-                    }`}
-                  >
-                    <span className="mr-1.5">{TAB_ICONS[key]}</span>
-                    {TAB_LABELS[key]}
-                  </button>
-                ))}
-              </div>
-
-              <div className="bg-zinc-50 border border-zinc-200 rounded-lg p-6 min-h-[400px]">
-                {activeTab === "video" && (
-                  <div>
-                    <h3 className="text-lg font-semibold mb-4">原始视频</h3>
-                    <div className="bg-zinc-100 rounded-lg p-4">
-                      <video
-                        controls
-                        className="w-full max-h-[60vh] rounded"
-                        src={taskId ? `${API_BASE}/api/video/${taskId}` : undefined}
-                      >
-                        您的浏览器不支持视频播放
-                      </video>
-                      {taskId && (
-                        <div className="flex items-center gap-4 mt-3 text-xs text-zinc-500">
-                          <span>视频 ID: {taskId}</span>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-
-                {activeTab === "audio" && (
-                  <div>
-                    <div className="flex items-center justify-between mb-4">
-                      <h3 className="text-lg font-semibold">提取的音频</h3>
-                      <button
-                        onClick={handleDownloadAudio}
-                        disabled={!audioUrl}
-                        className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 rounded-lg text-sm font-medium transition-colors"
-                      >
-                        下载 .wav
-                      </button>
-                    </div>
-                    {audioUrl ? (
-                      <div className="bg-zinc-100 rounded-lg p-4">
-                        <audio controls src={audioUrl} className="w-full" />
-                        <p className="text-xs text-zinc-500 mt-2">
-                          时长: {stageData.audio?.duration
-                            ? `${Number(stageData.audio.duration).toFixed(1)}秒`
-                            : "无"}
-                        </p>
-                      </div>
-                    ) : (
-                      <p className="text-zinc-500">加载音频中...</p>
-                    )}
-                  </div>
-                )}
-
-                {activeTab === "transcript" && (
-                  <div>
-                    <div className="flex items-center justify-between mb-4">
-                      <h3 className="text-lg font-semibold">转录文本</h3>
-                      <div className="flex gap-2">
-                        <button onClick={handleExportTxt} className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 rounded-lg text-sm font-medium transition-colors">导出 .txt</button>
-                        <button onClick={handleExportSrt} className="px-3 py-1.5 bg-green-600 hover:bg-green-500 rounded-lg text-sm font-medium transition-colors">导出 .srt</button>
-                      </div>
-                    </div>
-                    {stageData.transcript?.segments ? (
-                      <div className="bg-zinc-100 rounded-lg p-4 max-h-[60vh] overflow-y-auto">
-                        <pre className="text-sm text-zinc-700 whitespace-pre-wrap font-mono leading-relaxed">
-                          {(stageData.transcript.segments as Array<{start: number; end: number; text: string}>)
-                            .map((s) => `[${s.start.toFixed(1)}秒-${s.end.toFixed(1)}秒] ${s.text}`)
-                            .join("\n")}
-                        </pre>
-                      </div>
-                    ) : stageData.transcript?.transcript ? (
-                      <div className="bg-zinc-100 rounded-lg p-4 max-h-[60vh] overflow-y-auto">
-                        <pre className="text-sm text-zinc-700 whitespace-pre-wrap font-mono leading-relaxed">
-                          {String(stageData.transcript.transcript)}
-                        </pre>
-                      </div>
-                    ) : (
-                      <p className="text-zinc-500">加载转录文本中...</p>
-                    )}
-                  </div>
-                )}
-
-                {activeTab === "chapters" && (
-                  <div>
-                    <div className="flex items-center justify-between mb-4">
-                      <h3 className="text-lg font-semibold">章节结构</h3>
-                      <button onClick={() => handleExportJson("chapters")} className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 rounded-lg text-sm font-medium transition-colors">导出 .json</button>
-                    </div>
-                    {stageData.chapters?.chapters ? (
-                      <div className="overflow-x-auto">
-                        <table className="w-full text-sm">
-                          <thead>
-                            <tr className="border-b border-zinc-300">
-                              <th className="text-left py-2 px-3 text-zinc-400 font-medium">#</th>
-                              <th className="text-left py-2 px-3 text-zinc-400 font-medium">标题</th>
-                              <th className="text-left py-2 px-3 text-zinc-400 font-medium">时间范围</th>
-                              <th className="text-left py-2 px-3 text-zinc-400 font-medium">重要度</th>
-                              <th className="text-left py-2 px-3 text-zinc-400 font-medium">摘要</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {(stageData.chapters.chapters as Array<{title: string; start_time: number; end_time: number; importance_score: number; summary: string}>)
-                              .map((ch, i) => (
-                                <tr key={i} className="border-b border-zinc-200 hover:bg-zinc-200/50">
-                                  <td className="py-2 px-3 text-zinc-500">{i + 1}</td>
-                                  <td className="py-2 px-3 text-zinc-800 font-medium">{ch.title}</td>
-                                  <td className="py-2 px-3 text-zinc-400 font-mono text-xs">{ch.start_time}秒 — {ch.end_time}秒</td>
-                                  <td className="py-2 px-3">
-                                    <span className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${
-                                      ch.importance_score >= 8 ? "bg-red-100 text-red-700"
-                                      : ch.importance_score >= 5 ? "bg-yellow-100 text-yellow-700"
-                                      : "bg-zinc-300 text-zinc-400"
-                                    }`}>{ch.importance_score}</span>
-                                  </td>
-                                  <td className="py-2 px-3 text-zinc-400 text-xs max-w-xs truncate">{ch.summary}</td>
-                                </tr>
-                              ))}
-                          </tbody>
-                        </table>
-                      </div>
-                    ) : (
-                      <p className="text-zinc-500">加载章节中...</p>
-                    )}
-                  </div>
-                )}
-
-                {activeTab === "knowledge" && (
-                  <div>
-                    <div className="flex items-center justify-between mb-4">
-                      <h3 className="text-lg font-semibold">知识提取</h3>
-                      <button onClick={() => handleExportJson("knowledge")} className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 rounded-lg text-sm font-medium transition-colors">导出 .json</button>
-                    </div>
-                    {stageData.knowledge && Object.keys(stageData.knowledge).length > 0 ? (
-                      <div className="grid grid-cols-2 gap-4">
-                        {(["concepts", "frameworks", "methods", "tools", "papers", "code_examples", "insights"] as const).map((cat) => {
-                          const items = stageData.knowledge[cat] as string[] | undefined;
-                          if (!items || items.length === 0) return null;
-                          return (
-                            <div key={cat} className="bg-zinc-100 border border-zinc-200 rounded-lg p-4">
-                              <h4 className="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-2">{cat === "concepts" ? "概念" : cat === "frameworks" ? "框架" : cat === "methods" ? "方法" : cat === "tools" ? "工具" : cat === "papers" ? "论文" : cat === "code_examples" ? "代码示例" : "洞察"}</h4>
-                              <ul className="space-y-1">
-                                {items.map((item, i) => (
-                                  <li key={i} className="text-sm text-zinc-700 flex items-start gap-2">
-                                    <span className="text-zinc-400 mt-0.5">*</span>
-                                    <span>{item}</span>
-                                  </li>
-                                ))}
-                              </ul>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    ) : (
-                      <p className="text-zinc-500">加载知识数据中...</p>
-                    )}
-                  </div>
-                )}
-
-                {activeTab === "blog" && (
-                  <div>
-                    <div className="flex items-center justify-between mb-4">
-                      <h3 className="text-lg font-semibold">生成的博客</h3>
-                      <div className="flex gap-2">
-                        <button onClick={handleExportMd} disabled={!blogId} className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 rounded-lg text-sm font-medium transition-colors">导出 .md</button>
-                      </div>
-                    </div>
-                    {blogTitle && <h1 className="text-2xl font-bold mb-4">{blogTitle}</h1>}
-                    {blogMd ? (
-                      <div className="bg-zinc-100 rounded-lg p-6">
-                        <MarkdownRenderer content={blogMd} />
-                      </div>
-                    ) : (
-                      <p className="text-zinc-500">博客内容为空，请重试。</p>
-                    )}
-                  </div>
-                )}
-              </div>
+              <StageViewer
+                videoId={taskId}
+                stageData={doneStage.stageData}
+                audioUrl={doneStage.audioUrl}
+                activeTab={activeTab}
+                onTabChange={setActiveTab}
+                showExport
+                blogMarkdown={blogMd}
+                blogId={blogId}
+                exportHandlers={{
+                  onExportMd: handleExportMd,
+                  onExportTxt: handleExportTxt,
+                  onExportSrt: handleExportSrt,
+                  onExportJson: handleExportJson,
+                  onDownloadAudio: handleDownloadAudio,
+                }}
+              />
             </div>
           )}
         </main>
