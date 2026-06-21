@@ -196,24 +196,65 @@ async def transcribe(state):
         {"step": "transcribe",
          "message": f"Transcribing audio with Whisper ({WHISPER_DEVICE.upper()}, {WHISPER_MODEL_SIZE}, {lang_display})..."})
 
-    result = await _run_in_thread(
-        _whisper_transcribe, audio_path, language
-    )
-    full_text, seg_list, language = result
+    # Stream segments from thread via queue for real-time progress
+    seg_queue = asyncio.Queue()
+    loop = asyncio.get_event_loop()
+    error_holder = [None]
+    lang_holder = [None]
 
-    if full_text is None:
-        raise RuntimeError(
-            "Whisper model could not be loaded. "
-            "Install faster-whisper: pip install faster-whisper"
-        )
+    def _transcribe_worker():
+        try:
+            model = _get_whisper()
+            if model is None:
+                error_holder[0] = RuntimeError(
+                    "Whisper model could not be loaded. "
+                    "Install faster-whisper: pip install faster-whisper"
+                )
+                return
+            segments_gen, info = model.transcribe(
+                audio_path, beam_size=5, language=language, vad_filter=True
+            )
+            lang_holder[0] = info.language
+            for seg in segments_gen:
+                seg_data = {"start": seg.start, "end": seg.end, "text": seg.text.strip()}
+                loop.call_soon_threadsafe(seg_queue.put_nowait, seg_data)
+        except Exception as e:
+            error_holder[0] = e
+        finally:
+            loop.call_soon_threadsafe(seg_queue.put_nowait, None)
 
-    # Emit progress after each batch of segments
-    for i in range(0, len(seg_list), 20):
-        seg = seg_list[min(i + 19, len(seg_list) - 1)]
-        pct = min(95, int(seg["end"] / duration * 100)) if duration > 0 else 50
-        await sse_manager.emit(task_id, "step_progress",
-            {"step": "transcribe", "progress_pct": pct,
-             "detail": f"{seg['end']:.0f}s / {duration:.0f}s"})
+    # Start worker thread
+    worker_task = asyncio.ensure_future(_run_in_thread(_transcribe_worker))
+
+    # Consume segments and emit progress in real-time
+    transcript_parts = []
+    seg_list = []
+    while True:
+        seg = await seg_queue.get()
+        if seg is None:
+            break
+        transcript_parts.append(f"[{seg['start']:.1f}s-{seg['end']:.1f}s] {seg['text']}")
+        seg_list.append(seg)
+        # Emit progress every 10 segments
+        if len(seg_list) % 10 == 0:
+            pct = min(95, int(seg["end"] / duration * 100)) if duration > 0 else 50
+            await sse_manager.emit(task_id, "step_progress",
+                {"step": "transcribe", "progress_pct": pct,
+                 "detail": f"{seg['end']:.0f}s / {duration:.0f}s"})
+
+    # Wait for worker thread to finish
+    await worker_task
+
+    if error_holder[0] is not None:
+        raise error_holder[0]
+
+    full_text = "\n".join(transcript_parts)
+    language = lang_holder[0]
+
+    # Final progress
+    await sse_manager.emit(task_id, "step_progress",
+        {"step": "transcribe", "progress_pct": 100,
+         "detail": f"{len(seg_list)} segments"})
 
     await sse_manager.emit(task_id, "step_result",
         {"step": "transcribe", "transcript": full_text,
@@ -241,6 +282,9 @@ async def segment_chapters(state):
         '"start_time": 0, "end_time": 120, "importance_score": 8}]\n\n'
         f"Transcript:\n{transcript[:30000]}"
     )
+    await sse_manager.emit(task_id, "step_progress",
+        {"step": "segment_chapters", "progress_pct": 50,
+         "detail": "Analyzing transcript..."})
     resp = await _run_in_thread(
         _llm_call_sync, [{"role": "user", "content": prompt}]
     )
@@ -281,6 +325,9 @@ async def extract_knowledge(state):
         '  "insights": [key insights or conclusions]\n'
         f"Transcript:\n{transcript[:30000]}"
     )
+    await sse_manager.emit(task_id, "step_progress",
+        {"step": "extract_knowledge", "progress_pct": 50,
+         "detail": "Analyzing knowledge..."})
     resp = await _run_in_thread(
         _llm_call_sync, [{"role": "user", "content": prompt}]
     )
@@ -357,8 +404,10 @@ async def generate_blog(state):
         if chunk is None:
             break
         blog_md += chunk
+        # Dynamic progress based on content length (estimate ~5000 chars for full blog)
+        pct = min(95, int(len(blog_md) / 50))
         await sse_manager.emit(task_id, "step_progress",
-            {"step": "generate_blog", "progress_pct": 50, "detail": chunk})
+            {"step": "generate_blog", "progress_pct": pct, "detail": chunk})
 
     await stream_task
 

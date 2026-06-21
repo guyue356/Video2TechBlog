@@ -3,8 +3,14 @@
 **将技术视频一键转化为可发布的技术博客文章。**
 
 [![Python 3.10](https://img.shields.io/badge/Python-3.10-blue?logo=python&logoColor=white)](https://www.python.org/)
-[![Next.js 16](https://img.shields.io/badge/Next.js-16-black?logo=next.js&logoColor=white)](https://nextjs.org/)
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115-green?logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
+[![SQLAlchemy](https://img.shields.io/badge/SQLAlchemy-async-orange?logo=sqlalchemy&logoColor=white)](https://www.sqlalchemy.org/)
+[![SQLite](https://img.shields.io/badge/SQLite-3-blue?logo=sqlite&logoColor=white)](https://www.sqlite.org/)
+[![faster-whisper](https://img.shields.io/badge/faster--whisper-large--v3-purple)](https://github.com/SYSTRAN/faster-whisper)
+[![Next.js 16](https://img.shields.io/badge/Next.js-16-black?logo=next.js&logoColor=white)](https://nextjs.org/)
+[![React 19](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=white)](https://react.dev/)
+[![TypeScript 5](https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white)](https://www.typescriptlang.org/)
+[![Tailwind CSS 4](https://img.shields.io/badge/Tailwind_CSS-4-06B6D4?logo=tailwind-css&logoColor=white)](https://tailwindcss.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
 ---
@@ -27,16 +33,16 @@
 
 ## 核心能力
 
-| 能力 | 说明 |
-|------|------|
-| 🎬 视频上传 | 拖拽上传，支持最大 500MB 视频文件 |
+| 能力          | 说明                                                              |
+| ------------- | ----------------------------------------------------------------- |
+| 🎬 视频上传   | 拖拽上传，支持最大 500MB 视频文件                                 |
 | 🎙️ 语音转录 | faster-whisper large-v3，自动检测 GPU/CPU，自动检测语言（中英文） |
-| 📑 章节识别 | LLM 自动识别视频逻辑结构，输出章节标题、摘要、时间戳、重要性评分 |
-| 🧠 知识提取 | 结构化提取 7 类知识：概念、框架、方法、工具、论文、代码示例、洞见 |
-| ✍️ 博客生成 | 流式生成中文技术博客，实时打字机效果 |
-| 📊 实时进度 | SSE 推送每个步骤的进度、状态和中间结果 |
-| 📤 多格式导出 | Markdown、SRT 字幕、纯文本、JSON |
-| 🔄 任务管理 | 支持取消、重新处理，视频资产列表管理 |
+| 📑 章节识别   | LLM 自动识别视频逻辑结构，输出章节标题、摘要、时间戳、重要性评分  |
+| 🧠 知识提取   | 结构化提取 7 类知识：概念、框架、方法、工具、论文、代码示例、洞见 |
+| ✍️ 博客生成 | 流式生成中文技术博客，实时打字机效果                              |
+| 📊 实时进度   | SSE 推送每个步骤的进度、状态和中间结果                            |
+| 📤 多格式导出 | Markdown、SRT 字幕、纯文本、JSON                                  |
+| 🔄 任务管理   | 支持取消、重新处理，视频资产列表管理                              |
 
 ---
 
@@ -58,6 +64,24 @@
 
 - **上传视图** — 拖拽上传视频 → 实时进度条 → 5 个 Tab 展示各阶段结果（音频、转录、章节、知识、博客）
 - **资产视图** — 视频列表管理，支持搜索、状态筛选、查看详情、删除、重新处理
+
+#### 资产列表
+
+![资产列表](Assets/资产界面.png)
+
+#### 处理进度
+
+![处理进度](Assets/进度页.png)
+
+#### 各阶段结果示例
+
+|                音频提取                |                音频转录                |                章节划分                |
+| :------------------------------------: | :------------------------------------: | :------------------------------------: |
+| ![音频提取](Assets/详情页1-音频提取.png) | ![音频转录](Assets/详情页2-音频转录.png) | ![章节划分](Assets/详情页3-章节划分.png) |
+
+|                知识提取                |                最终博客                |
+| :------------------------------------: | :------------------------------------: |
+| ![知识提取](Assets/详情页4-知识提取.png) | ![最终博客](Assets/详情页4-最终博客.png) |
 
 ---
 
@@ -173,29 +197,29 @@ flowchart TD
 
 ### 后端
 
-| 层级 | 技术 | 用途 |
-|------|------|------|
-| 运行时 | Python 3.10 | 通过 Conda 管理环境 |
-| Web 框架 | FastAPI + Uvicorn | 异步 HTTP 服务，自动 OpenAPI 文档 |
-| ORM | SQLAlchemy + aiosqlite | 异步数据库操作 |
-| 数据库 | SQLite | 轻量级本地存储，零配置 |
-| 语音转录 | faster-whisper (large-v3) | OpenAI Whisper 的高效实现 |
-| LLM | DeepSeek (deepseek-v4-pro) | 章节划分、知识提取、博客生成 |
-| 音视频 | ffmpeg | 音频提取，格式转换 |
-| SSE | sse-starlette | Server-Sent Events 推送 |
-| Markdown | mistune | Markdown 转 HTML |
-| 数据校验 | Pydantic | 请求/响应模型校验 |
+| 层级     | 技术                       | 用途                              |
+| -------- | -------------------------- | --------------------------------- |
+| 运行时   | Python 3.10                | 通过 Conda 管理环境               |
+| Web 框架 | FastAPI + Uvicorn          | 异步 HTTP 服务，自动 OpenAPI 文档 |
+| ORM      | SQLAlchemy + aiosqlite     | 异步数据库操作                    |
+| 数据库   | SQLite                     | 轻量级本地存储，零配置            |
+| 语音转录 | faster-whisper (large-v3)  | OpenAI Whisper 的高效实现         |
+| LLM      | DeepSeek (deepseek-v4-pro) | 章节划分、知识提取、博客生成      |
+| 音视频   | ffmpeg                     | 音频提取，格式转换                |
+| SSE      | sse-starlette              | Server-Sent Events 推送           |
+| Markdown | mistune                    | Markdown 转 HTML                  |
+| 数据校验 | Pydantic                   | 请求/响应模型校验                 |
 
 ### 前端
 
-| 层级 | 技术 | 用途 |
-|------|------|------|
-| 框架 | Next.js 16 (App Router) | React 全栈框架 |
-| UI 库 | React 19 | 组件化 UI |
-| 样式 | Tailwind CSS 4 + @tailwindcss/typography | 原子化 CSS + 排版插件 |
+| 层级     | 技术                                           | 用途                     |
+| -------- | ---------------------------------------------- | ------------------------ |
+| 框架     | Next.js 16 (App Router)                        | React 全栈框架           |
+| UI 库    | React 19                                       | 组件化 UI                |
+| 样式     | Tailwind CSS 4 + @tailwindcss/typography       | 原子化 CSS + 排版插件    |
 | Markdown | react-markdown + remark-gfm + rehype-highlight | Markdown 渲染 + 代码高亮 |
-| 类型 | TypeScript 5 | 类型安全 |
-| 状态管理 | useState / useRef | 无外部状态库，轻量级 |
+| 类型     | TypeScript 5                                   | 类型安全                 |
+| 状态管理 | useState / useRef                              | 无外部状态库，轻量级     |
 
 ---
 
@@ -281,12 +305,14 @@ WHISPER_LANGUAGE=zh
 ```
 
 脚本会自动：
+
 1. 检查 Conda、Node.js、ffmpeg 是否安装
 2. 创建 `video2techblog` Conda 环境（Python 3.10）
 3. 安装 Python 和 Node.js 依赖
 4. 在同一窗口启动后端（端口 8000）和前端（端口 3000）
 
 启动后访问：
+
 - **前端界面**：http://localhost:3000
 - **API 文档**：http://localhost:8000/docs
 
@@ -319,18 +345,19 @@ npm run dev
 
 处理完成后，页面会展示 6 个标签页：
 
-| 标签 | 内容 |
-|------|------|
-| 🎬 视频 | 原始视频播放器 |
-| 🎵 音频 | 音频文件信息和播放器 |
-| ✎ 转录 | 带时间戳的逐段转录文本 |
-| ☰ 章节 | 章节列表，含标题、摘要、时间范围、重要性评分 |
+| 标签    | 内容                                           |
+| ------- | ---------------------------------------------- |
+| 🎬 视频 | 原始视频播放器                                 |
+| 🎵 音频 | 音频文件信息和播放器                           |
+| ✎ 转录 | 带时间戳的逐段转录文本                         |
+| ☰ 章节 | 章节列表，含标题、摘要、时间范围、重要性评分   |
 | ★ 知识 | 结构化知识：概念、框架、方法、工具、代码示例等 |
-| 📝 博客 | 生成的 Markdown 博客文章（带代码高亮） |
+| 📝 博客 | 生成的 Markdown 博客文章（带代码高亮）         |
 
 ### 导出
 
 博客支持多种格式导出：
+
 - **Markdown** (.md) — 原始 Markdown 文件
 - **SRT** (.srt) — 字幕文件
 - **TXT** (.txt) — 纯文本转录
@@ -339,6 +366,7 @@ npm run dev
 ### 资产管理
 
 切换到"资产"视图可以：
+
 - 查看所有已处理的视频列表
 - 按状态筛选（处理中、已完成、失败）
 - 搜索视频
@@ -351,17 +379,17 @@ npm run dev
 
 所有配置在 [backend/app/config.py](backend/app/config.py) 中定义，通过环境变量覆盖：
 
-| 配置项 | 默认值 | 说明 |
-|--------|--------|------|
-| `DEEPSEEK_API_KEY` | `""` | DeepSeek API 密钥（**必需**） |
-| `DEEPSEEK_BASE_URL` | `https://api.deepseek.com/v1` | API 基础 URL |
-| `DEEPSEEK_MODEL` | `deepseek-v4-pro` | LLM 模型名称 |
-| `WHISPER_MODEL_SIZE` | `large-v3` | Whisper 模型大小 |
-| `WHISPER_DEVICE` | 自动检测 | 计算设备（cuda/cpu） |
-| `WHISPER_COMPUTE_TYPE` | 自动检测 | 计算精度（int8_float16/int8） |
-| `WHISPER_LANGUAGE` | `` (空) | 转录语言（空为自动检测，支持中英文） |
-| `MAX_VIDEO_SIZE_MB` | `500` | 最大视频文件大小 |
-| `AUDIO_SAMPLE_RATE` | `16000` | 音频采样率 |
+| 配置项                   | 默认值                          | 说明                                 |
+| ------------------------ | ------------------------------- | ------------------------------------ |
+| `DEEPSEEK_API_KEY`     | `""`                          | DeepSeek API 密钥（**必需**）  |
+| `DEEPSEEK_BASE_URL`    | `https://api.deepseek.com/v1` | API 基础 URL                         |
+| `DEEPSEEK_MODEL`       | `deepseek-v4-pro`             | LLM 模型名称                         |
+| `WHISPER_MODEL_SIZE`   | `large-v3`                    | Whisper 模型大小                     |
+| `WHISPER_DEVICE`       | 自动检测                        | 计算设备（cuda/cpu）                 |
+| `WHISPER_COMPUTE_TYPE` | 自动检测                        | 计算精度（int8_float16/int8）        |
+| `WHISPER_LANGUAGE`     | `` (空)                         | 转录语言（空为自动检测，支持中英文） |
+| `MAX_VIDEO_SIZE_MB`    | `500`                         | 最大视频文件大小                     |
+| `AUDIO_SAMPLE_RATE`    | `16000`                       | 音频采样率                           |
 
 ---
 
@@ -371,33 +399,33 @@ npm run dev
 
 ### 核心端点
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| `POST` | `/api/upload` | 上传视频，启动处理流水线 |
-| `GET` | `/api/task/{id}/stream` | SSE 实时进度流 |
-| `GET` | `/api/task/{id}` | 查询任务状态 |
-| `POST` | `/api/task/{id}/cancel` | 取消任务 |
-| `GET` | `/api/videos` | 视频列表（支持搜索和状态筛选） |
-| `GET` | `/api/videos/{id}` | 视频详情 |
-| `DELETE` | `/api/videos/{id}` | 删除视频 |
-| `POST` | `/api/videos/{id}/reprocess` | 重新处理 |
-| `GET` | `/api/blog/{id}` | 获取博客内容 |
-| `GET` | `/api/video/{id}` | 获取原始视频文件 |
-| `GET` | `/api/audio/{id}` | 获取音频文件 |
-| `POST` | `/api/export/md` | 导出 Markdown |
-| `POST` | `/api/export/srt` | 导出 SRT 字幕 |
+| 方法       | 路径                           | 说明                           |
+| ---------- | ------------------------------ | ------------------------------ |
+| `POST`   | `/api/upload`                | 上传视频，启动处理流水线       |
+| `GET`    | `/api/task/{id}/stream`      | SSE 实时进度流                 |
+| `GET`    | `/api/task/{id}`             | 查询任务状态                   |
+| `POST`   | `/api/task/{id}/cancel`      | 取消任务                       |
+| `GET`    | `/api/videos`                | 视频列表（支持搜索和状态筛选） |
+| `GET`    | `/api/videos/{id}`           | 视频详情                       |
+| `DELETE` | `/api/videos/{id}`           | 删除视频                       |
+| `POST`   | `/api/videos/{id}/reprocess` | 重新处理                       |
+| `GET`    | `/api/blog/{id}`             | 获取博客内容                   |
+| `GET`    | `/api/video/{id}`            | 获取原始视频文件               |
+| `GET`    | `/api/audio/{id}`            | 获取音频文件                   |
+| `POST`   | `/api/export/md`             | 导出 Markdown                  |
+| `POST`   | `/api/export/srt`            | 导出 SRT 字幕                  |
 
 ### SSE 事件类型
 
-| 事件 | Payload | 说明 |
-|------|---------|------|
-| `step_start` | `{step, message}` | 步骤开始 |
-| `step_progress` | `{step, progress_pct, detail}` | 步骤进度（百分比） |
-| `step_result` | `{step, ...data}` | 步骤完成，含中间结果 |
-| `step_error` | `{step, message}` | 步骤错误 |
-| `complete` | `{blog_id}` | 全流程完成 |
-| `cancelled` | `{message}` | 任务被取消 |
-| `ping` | `{}` | 30 秒保活心跳 |
+| 事件              | Payload                          | 说明                 |
+| ----------------- | -------------------------------- | -------------------- |
+| `step_start`    | `{step, message}`              | 步骤开始             |
+| `step_progress` | `{step, progress_pct, detail}` | 步骤进度（百分比）   |
+| `step_result`   | `{step, ...data}`              | 步骤完成，含中间结果 |
+| `step_error`    | `{step, message}`              | 步骤错误             |
+| `complete`      | `{blog_id}`                    | 全流程完成           |
+| `cancelled`     | `{message}`                    | 任务被取消           |
+| `ping`          | `{}`                           | 30 秒保活心跳        |
 
 ---
 
@@ -509,20 +537,6 @@ EXTRACTING_KNOWLEDGE -> GENERATING_BLOG -> COMPLETED
 ### 6. 自动设备检测
 
 Whisper 模型自动检测 CUDA 支持，优先使用 GPU（int8_float16 精度），回退到 CPU（int8 精度），最大化兼容性。
-
----
-
-## Roadmap
-
-- [ ] 支持更多视频源（YouTube 链接、Bilibili 链接）
-- [x] 支持英文及中文视频的自动语言检测和转录
-- [ ] 博客编辑功能（在线修改生成的博客）
-- [ ] 批量处理多个视频
-- [ ] 自定义博客模板和风格
-- [ ] 集成更多 LLM（GPT-4、Claude、Gemini）
-- [ ] 添加用户认证和多租户支持
-- [ ] Docker 容器化部署
-- [ ] 支持 Whisper large-v3-turbo 模型（更快）
 
 ---
 

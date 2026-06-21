@@ -814,7 +814,6 @@ export default function Home() {
             </button>
           </nav>
         </div>
-        <span className="text-xs text-zinc-400">Phase 1 + 2 Demo</span>
       </header>
 
       {/* Delete confirmation modal */}
@@ -854,57 +853,107 @@ export default function Home() {
       <div className="flex-1 flex overflow-hidden">
         {/* Step Sidebar (upload/processing views only) */}
         {view === "upload" && phase !== "upload" && (
-          <aside className="w-64 border-r border-zinc-200 p-4 shrink-0 overflow-y-auto">
-            <h2 className="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-3">
+          <aside className="w-72 border-r border-zinc-200 p-5 shrink-0 overflow-y-auto bg-zinc-50/50">
+            <h2 className="text-xs font-semibold text-zinc-500 uppercase tracking-wider mb-5">
               处理流程
             </h2>
-            <ul className="space-y-1">
-              {STEPS.map((key) => {
-                const s = steps[key];
-                const icon =
-                  s?.status === "completed" ? "✅"
-                  : s?.status === "active" ? "▶"
-                  : s?.status === "error" ? "❌"
-                  : "○";
-                return (
-                  <li
-                    key={key}
-                    className={`text-sm px-3 py-2 rounded-md ${
-                      s?.status === "active" ? "bg-blue-50"
-                      : s?.status === "completed" ? ""
-                      : s?.status === "error" ? ""
-                      : ""
-                    }`}
-                  >
-                    <div className="flex items-center gap-2">
-                      <span>{icon}</span>
-                      <span className={
-                        s?.status === "active" ? "text-blue-600 font-medium"
-                        : s?.status === "completed" ? "text-zinc-500"
-                        : s?.status === "error" ? "text-red-600"
-                        : "text-zinc-400"
-                      }>{STEP_LABELS[key]}</span>
-                      {s?.status === "active" && s.progressPct > 0 && (
-                        <span className="ml-auto text-xs text-blue-600">{s.progressPct}%</span>
-                      )}
-                      {s?.status === "completed" && (
-                        <span className="ml-auto text-xs text-green-600">100%</span>
-                      )}
-                    </div>
-                    {s?.status === "active" && s.message && (
-                      <p className="text-xs text-zinc-500 mt-1 ml-6 truncate">{s.message}</p>
-                    )}
-                    {s?.status === "active" && s.progressPct > 0 && (
-                      <div className="mt-1.5 w-full bg-zinc-200 rounded-full h-1.5">
+            <ul className="relative">
+              {/* Vertical connector line */}
+              <div className="absolute left-[15px] top-3 bottom-3 w-px bg-zinc-200" />
+              <div className="space-y-1">
+                {STEPS.map((key, idx) => {
+                  const s = steps[key];
+                  const isActive = s?.status === "active";
+                  const isCompleted = s?.status === "completed";
+                  const isError = s?.status === "error";
+                  const isPending = !s || s.status === "pending";
+
+                  return (
+                    <li
+                      key={key}
+                      className={`relative pl-10 pr-3 py-2.5 rounded-lg transition-all duration-300 ${
+                        isActive ? "bg-blue-50/80" : ""
+                      }`}
+                    >
+                      {/* Step indicator circle */}
+                      <div className="absolute left-0 top-2.5 flex items-center justify-center">
                         <div
-                          className="bg-blue-500 h-1.5 rounded-full transition-all duration-300"
-                          style={{ width: `${s.progressPct}%` }}
-                        />
+                          className={`w-[30px] h-[30px] rounded-full flex items-center justify-center text-xs font-bold transition-all duration-300 ${
+                            isCompleted
+                              ? "bg-emerald-500 text-white shadow-sm shadow-emerald-200"
+                              : isActive
+                                ? "bg-blue-600 text-white animate-pulse-ring shadow-sm shadow-blue-200"
+                                : isError
+                                  ? "bg-red-500 text-white shadow-sm shadow-red-200"
+                                  : "bg-white border-2 border-zinc-300 text-zinc-400"
+                          }`}
+                        >
+                          {isCompleted ? (
+                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                            </svg>
+                          ) : isActive ? (
+                            <svg className="w-4 h-4 animate-spin-slow" fill="none" viewBox="0 0 24 24">
+                              <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
+                              <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+                            </svg>
+                          ) : isError ? (
+                            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
+                              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+                            </svg>
+                          ) : (
+                            <span>{idx + 1}</span>
+                          )}
+                        </div>
                       </div>
-                    )}
-                  </li>
-                );
-              })}
+
+                      {/* Step content */}
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2">
+                          <span className={`text-sm font-medium truncate ${
+                            isActive ? "text-blue-700"
+                            : isCompleted ? "text-zinc-500"
+                            : isError ? "text-red-600"
+                            : "text-zinc-400"
+                          }`}>
+                            {STEP_LABELS[key]}
+                          </span>
+                          {isActive && s.progressPct > 0 && (
+                            <span className="ml-auto text-xs font-mono font-semibold text-blue-600 tabular-nums">
+                              {s.progressPct}%
+                            </span>
+                          )}
+                          {isCompleted && (
+                            <span className="ml-auto text-xs font-mono font-semibold text-emerald-600 tabular-nums">
+                              ✓
+                            </span>
+                          )}
+                        </div>
+
+                        {/* Active step detail */}
+                        {isActive && s.message && (
+                          <p className="text-xs text-zinc-500 mt-1 truncate">{s.message}</p>
+                        )}
+
+                        {/* Active step progress bar */}
+                        {isActive && s.progressPct > 0 && (
+                          <div className="mt-2 w-full bg-blue-100 rounded-full h-1.5 overflow-hidden">
+                            <div
+                              className="animate-shimmer h-1.5 rounded-full transition-all duration-500 ease-out"
+                              style={{ width: `${s.progressPct}%` }}
+                            />
+                          </div>
+                        )}
+
+                        {/* Completed step detail */}
+                        {isCompleted && s.message && (
+                          <p className="text-xs text-emerald-600/70 mt-0.5">{s.message}</p>
+                        )}
+                      </div>
+                    </li>
+                  );
+                })}
+              </div>
             </ul>
           </aside>
         )}
@@ -968,13 +1017,27 @@ export default function Home() {
 
           {view === "upload" && phase === "processing" && (
             <div className="max-w-4xl mx-auto">
-              <div className="mb-6">
-                <div className="flex items-center justify-between mb-1">
-                  <h2 className="text-xl font-semibold">
-                    {currentStepLabel || "处理中..."}
-                  </h2>
+              {/* Header card */}
+              <div className="bg-white border border-zinc-200 rounded-xl shadow-sm p-6 mb-6">
+                <div className="flex items-center justify-between mb-4">
                   <div className="flex items-center gap-3">
-                    <span className="text-sm font-mono text-zinc-500">
+                    <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center">
+                      <svg className="w-5 h-5 text-blue-600 animate-spin-slow" fill="none" viewBox="0 0 24 24">
+                        <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
+                        <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+                      </svg>
+                    </div>
+                    <div>
+                      <h2 className="text-lg font-semibold text-zinc-800">
+                        {currentStepLabel || "准备中..."}
+                      </h2>
+                      {activeStep && steps[activeStep]?.message && (
+                        <p className="text-sm text-zinc-500 mt-0.5">{steps[activeStep].message}</p>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <span className="text-sm font-mono text-zinc-500 bg-zinc-100 px-2.5 py-1 rounded-md">
                       {formatElapsed(elapsed)}
                     </span>
                     <button
@@ -985,28 +1048,32 @@ export default function Home() {
                     </button>
                   </div>
                 </div>
-                {activeStep && steps[activeStep]?.message && (
-                  <p className="text-sm text-zinc-500 mb-3">{steps[activeStep].message}</p>
-                )}
+
                 {/* Overall progress bar */}
-                <div className="w-full bg-zinc-200 rounded-full h-3 mb-2">
+                <div className="w-full bg-zinc-100 rounded-full h-2.5 overflow-hidden">
                   <div
-                    className="bg-blue-600 h-3 rounded-full transition-all duration-500 ease-out"
+                    className="animate-shimmer h-2.5 rounded-full transition-all duration-500 ease-out"
                     style={{ width: `${overallPct}%` }}
                   />
                 </div>
-                <div className="flex items-center justify-between text-xs text-zinc-500">
-                  <span>{completedSteps}/{STEPS.length} 步骤完成</span>
-                  <span>{overallPct}%</span>
+                <div className="flex items-center justify-between mt-2">
+                  <span className="text-xs text-zinc-500">
+                    {completedSteps}/{STEPS.length} 步骤完成
+                  </span>
+                  <span className="text-xs font-mono font-semibold text-blue-600 tabular-nums">
+                    {overallPct}%
+                  </span>
                 </div>
               </div>
 
+              {/* Live transcript */}
               {transcript && (
-                <section className="mb-6">
-                  <h3 className="text-sm font-semibold text-zinc-400 uppercase tracking-wider mb-2">
+                <section className="mb-6 animate-fade-in-up">
+                  <h3 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse" />
                     实时转录
                   </h3>
-                  <div className="bg-zinc-50 border border-zinc-200 rounded-lg p-4 max-h-64 overflow-y-auto">
+                  <div className="bg-zinc-50 border border-zinc-200 rounded-xl p-4 max-h-64 overflow-y-auto shadow-sm">
                     <pre className="text-sm text-zinc-700 whitespace-pre-wrap font-mono leading-relaxed">
                       {transcript.slice(-3000)}
                     </pre>
@@ -1014,19 +1081,26 @@ export default function Home() {
                 </section>
               )}
 
+              {/* Chapters */}
               {chapters.length > 0 && (
-                <section className="mb-6">
-                  <h3 className="text-sm font-semibold text-zinc-400 uppercase tracking-wider mb-2">
+                <section className="mb-6 animate-fade-in-up">
+                  <h3 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
                     章节结构
                   </h3>
-                  <div className="bg-zinc-50 border border-zinc-200 rounded-lg p-4">
-                    <ol className="list-decimal list-inside space-y-1">
+                  <div className="bg-white border border-zinc-200 rounded-xl p-4 shadow-sm">
+                    <ol className="space-y-2">
                       {chapters.map((ch, i) => (
-                        <li key={i} className="text-sm text-zinc-700">
-                          <span className="font-medium">{ch.title as string}</span>
-                          <span className="text-zinc-500 ml-2">
-                            ({ch.start_time as number}s - {ch.end_time as number}s)
+                        <li key={i} className="flex items-start gap-3 text-sm">
+                          <span className="flex-none w-6 h-6 rounded-full bg-zinc-100 text-zinc-500 text-xs font-semibold flex items-center justify-center mt-0.5">
+                            {i + 1}
                           </span>
+                          <div>
+                            <span className="font-medium text-zinc-800">{ch.title as string}</span>
+                            <span className="text-zinc-400 ml-2 text-xs font-mono">
+                              {ch.start_time as number}s – {ch.end_time as number}s
+                            </span>
+                          </div>
                         </li>
                       ))}
                     </ol>
@@ -1034,9 +1108,11 @@ export default function Home() {
                 </section>
               )}
 
+              {/* Knowledge extraction */}
               {Object.keys(knowledge).length > 0 && (
-                <section className="mb-6">
-                  <h3 className="text-sm font-semibold text-zinc-400 uppercase tracking-wider mb-2">
+                <section className="mb-6 animate-fade-in-up">
+                  <h3 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
                     知识提取
                   </h3>
                   <div className="grid grid-cols-2 lg:grid-cols-3 gap-3">
@@ -1046,8 +1122,8 @@ export default function Home() {
                       const items = knowledge[cat] as string[] | undefined;
                       if (!items || items.length === 0) return null;
                       return (
-                        <div key={cat} className="bg-zinc-50 border border-zinc-200 rounded-lg p-3">
-                          <h4 className="text-xs font-semibold text-zinc-500 uppercase mb-1">{cat}</h4>
+                        <div key={cat} className="bg-white border border-zinc-200 rounded-xl p-3 shadow-sm">
+                          <h4 className="text-xs font-semibold text-zinc-500 uppercase mb-1.5">{cat}</h4>
                           <ul className="space-y-0.5">
                             {items.map((item, i) => (
                               <li key={i} className="text-sm text-zinc-700">{item}</li>
@@ -1060,12 +1136,14 @@ export default function Home() {
                 </section>
               )}
 
+              {/* Live blog output */}
               {blogMd && (
-                <section className="mb-6">
-                  <h3 className="text-sm font-semibold text-zinc-400 uppercase tracking-wider mb-2">
+                <section className="mb-6 animate-fade-in-up">
+                  <h3 className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-violet-400 animate-pulse" />
                     实时博客输出
                   </h3>
-                  <div className="bg-zinc-50 border border-zinc-200 rounded-lg p-4 max-h-[70vh] overflow-y-auto">
+                  <div className="bg-white border border-zinc-200 rounded-xl p-5 max-h-[70vh] overflow-y-auto shadow-sm">
                     <MarkdownRenderer content={blogMd} />
                   </div>
                 </section>
