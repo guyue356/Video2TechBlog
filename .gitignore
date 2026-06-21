@@ -17,4 +17,3 @@ backend/*.log
 *.db
 backend/*.db
 
-Assets/
