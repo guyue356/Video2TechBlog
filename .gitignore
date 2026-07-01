@@ -17,3 +17,6 @@ backend/*.log
 *.db
 backend/*.db
 
+# WorkBuddy local workspace data
+.workbuddy/
+

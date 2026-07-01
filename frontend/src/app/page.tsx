@@ -308,10 +308,20 @@ export default function Home() {
     es.addEventListener("step_start", (e) => {
       const d = JSON.parse(e.data);
       if (STEPS.includes(d.step)) {
-        setSteps((prev) => ({
-          ...prev,
-          [d.step]: { ...prev[d.step], status: "active", message: d.message || "" },
-        }));
+        const idx = STEPS.indexOf(d.step);
+        setSteps((prev) => {
+          const next = { ...prev };
+          // 新步骤已经开始，说明它前面的步骤必然已完成；
+          // 如果之前因网络/事件丢失没改成 completed，这里兜底修正
+          for (let i = 0; i < idx; i++) {
+            const key = STEPS[i];
+            if (next[key]?.status === "active") {
+              next[key] = { ...next[key], status: "completed", progressPct: 100 };
+            }
+          }
+          next[d.step] = { ...next[d.step], status: "active", message: d.message || "" };
+          return next;
+        });
       }
     });
 
@@ -335,10 +345,15 @@ export default function Home() {
     es.addEventListener("step_result", (e) => {
       const d = JSON.parse(e.data);
       if (STEPS.includes(d.step)) {
-        setStepStatus(d.step, "completed");
         setSteps((prev) => ({
           ...prev,
-          [d.step]: { ...prev[d.step], result: d },
+          [d.step]: {
+            ...prev[d.step],
+            status: "completed",
+            result: d,
+            progressPct: 100,
+            detail: d.detail ?? prev[d.step].detail ?? "",
+          },
         }));
         if (d.step === "transcribe" && d.transcript) {
           setTranscript(d.transcript);
@@ -368,6 +383,16 @@ export default function Home() {
     es.addEventListener("complete", (e) => {
       const d = JSON.parse(e.data);
       setBlogId(d.blog_id || null);
+      // 处理完成兜底：把所有仍活跃的步骤统一标记为完成
+      setSteps((prev) => {
+        const next = { ...prev };
+        STEPS.forEach((key) => {
+          if (next[key]?.status === "active") {
+            next[key] = { ...next[key], status: "completed", progressPct: 100 };
+          }
+        });
+        return next;
+      });
       setPhase("done");
       // Fetch stage data using the hook
       doneStage.fetchStageData(taskId!);

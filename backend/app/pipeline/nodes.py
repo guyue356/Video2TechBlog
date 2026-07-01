@@ -251,14 +251,10 @@ async def transcribe(state):
     full_text = "\n".join(transcript_parts)
     language = lang_holder[0]
 
-    # Final progress
-    await sse_manager.emit(task_id, "step_progress",
-        {"step": "transcribe", "progress_pct": 100,
-         "detail": f"{len(seg_list)} segments"})
-
     await sse_manager.emit(task_id, "step_result",
         {"step": "transcribe", "transcript": full_text,
-         "segments": seg_list, "language": language})
+         "segments": seg_list, "language": language,
+         "progress_pct": 100, "detail": f"{len(seg_list)} segments"})
     state["transcript"] = full_text
     state["segments"] = seg_list
     return state
