@@ -10,3 +10,4 @@ aiofiles
 pydantic
 python-dotenv
 mistune
+yt-dlp

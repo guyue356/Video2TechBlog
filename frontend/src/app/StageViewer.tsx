@@ -7,7 +7,7 @@ const MarkdownRenderer = dynamic(() => import("./MarkdownRenderer"), {
   loading: () => <div className="animate-pulse h-64 bg-zinc-100 rounded-lg" />,
 });
 
-const API_BASE = "http://localhost:8000";
+const API_BASE = "http://localhost:8001";
 
 const KNOWLEDGE_CATEGORIES = [
   "concepts",
@@ -58,6 +58,10 @@ interface StageViewerProps {
   blogMarkdown?: string;
   blogId?: number | null;
   exportHandlers?: ExportHandlers;
+  /** Callback to regenerate blog only (skip transcript/chapters/knowledge) */
+  onRegenerate?: () => void;
+  /** Whether blog regeneration is in progress */
+  regenerating?: boolean;
 }
 
 export default function StageViewer({
@@ -72,6 +76,8 @@ export default function StageViewer({
   blogMarkdown,
   blogId,
   exportHandlers,
+  onRegenerate,
+  regenerating = false,
 }: StageViewerProps) {
   const sd = stageData;
 
@@ -88,7 +94,7 @@ export default function StageViewer({
             onClick={() => onTabChange(key)}
             className={`px-4 py-2.5 text-sm font-medium rounded-t-lg transition-colors ${
               activeTab === key
-                ? "bg-white text-zinc-900 border-b-2 border-blue-500 shadow-sm"
+                ? "bg-white text-zinc-900 border-b-2 border-sky-400 shadow-sm"
                 : "text-zinc-500 hover:text-zinc-700 hover:bg-zinc-200/50"
             }`}
           >
@@ -130,7 +136,7 @@ export default function StageViewer({
                 <button
                   onClick={exportHandlers.onDownloadAudio}
                   disabled={!audioUrl}
-                  className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 rounded-lg text-sm font-medium transition-colors"
+                  className="px-3 py-1.5 bg-sky-400 hover:bg-sky-400 disabled:opacity-40 rounded-lg text-sm font-medium transition-colors"
                 >
                   下载 .wav
                 </button>
@@ -162,7 +168,7 @@ export default function StageViewer({
                   {exportHandlers?.onExportTxt && (
                     <button
                       onClick={exportHandlers.onExportTxt}
-                      className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 rounded-lg text-sm font-medium transition-colors"
+                      className="px-3 py-1.5 bg-sky-400 hover:bg-sky-400 rounded-lg text-sm font-medium transition-colors"
                     >
                       导出 .txt
                     </button>
@@ -215,7 +221,7 @@ export default function StageViewer({
               {showExport && exportHandlers?.onExportJson && (
                 <button
                   onClick={() => exportHandlers.onExportJson!("chapters")}
-                  className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 rounded-lg text-sm font-medium transition-colors"
+                  className="px-3 py-1.5 bg-sky-400 hover:bg-sky-400 rounded-lg text-sm font-medium transition-colors"
                 >
                   导出 .json
                 </button>
@@ -289,7 +295,7 @@ export default function StageViewer({
               {showExport && exportHandlers?.onExportJson && (
                 <button
                   onClick={() => exportHandlers.onExportJson!("knowledge")}
-                  className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 rounded-lg text-sm font-medium transition-colors"
+                  className="px-3 py-1.5 bg-sky-400 hover:bg-sky-400 rounded-lg text-sm font-medium transition-colors"
                 >
                   导出 .json
                 </button>
@@ -334,15 +340,26 @@ export default function StageViewer({
           <div>
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-semibold">博客</h3>
-              {showExport && exportHandlers?.onExportMd && (
-                <button
-                  onClick={exportHandlers.onExportMd}
-                  disabled={!blogId}
-                  className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 rounded-lg text-sm font-medium transition-colors"
-                >
-                  导出 .md
-                </button>
-              )}
+              <div className="flex gap-2">
+                {onRegenerate && (
+                  <button
+                    onClick={onRegenerate}
+                    disabled={regenerating}
+                    className="px-3 py-1.5 bg-orange-600 hover:bg-orange-500 disabled:opacity-40 rounded-lg text-sm font-medium transition-colors"
+                  >
+                    {regenerating ? "生成中..." : "重新生成"}
+                  </button>
+                )}
+                {showExport && exportHandlers?.onExportMd && (
+                  <button
+                    onClick={exportHandlers.onExportMd}
+                    disabled={!blogId}
+                    className="px-3 py-1.5 bg-sky-400 hover:bg-sky-400 disabled:opacity-40 rounded-lg text-sm font-medium transition-colors"
+                  >
+                    导出 .md
+                  </button>
+                )}
+              </div>
             </div>
             {resolvedBlogMd ? (
               <div className="bg-zinc-100 rounded-lg p-6">

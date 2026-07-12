@@ -2,7 +2,7 @@
 
 import { useState, useCallback, useEffect, useRef } from "react";
 
-const API_BASE = "http://localhost:8000";
+const API_BASE = "http://localhost:8001";
 
 export type TabKey = "video" | "audio" | "transcript" | "chapters" | "knowledge" | "blog";
 

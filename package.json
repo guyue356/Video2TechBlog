@@ -1,0 +1,15 @@
+{
+  "name": "video2techblog",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "concurrently -k -n BE,FE -c cyan,magenta \"cd backend && conda run -n video2techblog --no-capture-output python -m uvicorn app.main:app --reload --port 8001\" \"npm run dev -C frontend\"",
+    "dev:backend": "cd backend && conda run -n video2techblog --no-capture-output python -m uvicorn app.main:app --reload --port 8001",
+    "dev:frontend": "npm run dev -C frontend",
+    "build": "npm run build -C frontend",
+    "lint": "npm run lint -C frontend"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}

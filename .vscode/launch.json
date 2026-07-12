@@ -1,0 +1,22 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Backend (Python)",
+      "type": "debugpy",
+      "request": "launch",
+      "module": "uvicorn",
+      "args": ["app.main:app", "--reload", "--port", "8000"],
+      "cwd": "${workspaceFolder}/backend",
+      "console": "integratedTerminal",
+      "python": "${workspaceFolder}/.conda/envs/video2techblog/python.exe"
+    }
+  ],
+  "compounds": [
+    {
+      "name": "Start All (Debug Backend)",
+      "configurations": ["Backend (Python)"],
+      "preLaunchTask": "Start Frontend"
+    }
+  ]
+}

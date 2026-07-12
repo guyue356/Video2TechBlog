@@ -1,7 +1,9 @@
 import asyncio, json, uuid, aiofiles, re as _re, os, time
+from typing import Optional, Set, List, Dict
+from datetime import datetime, timezone
 from pathlib import Path
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, UploadFile, File, BackgroundTasks, Query
+from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, Query, Body
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import select, func
@@ -9,18 +11,24 @@ from sse_starlette.sse import EventSourceResponse
 
 from .config import VIDEOS_DIR, AUDIO_DIR, OUTPUT_DIR
 from .models.database import (
-    async_session, init_db, Video, Transcript, Topic, Concept, Blog, StageResult, TaskStatus
+    async_session, init_db, Video, Transcript, Topic, Concept, Blog, StageResult, PromptTemplate, PromptPreset, TaskStatus
 )
 from .models.schemas import (
     TaskResponse, TaskStatusResponse, BlogResponse,
     ConceptResponse, TopicResponse, ExportRequest, ExportResponse,
-    StageResultResponse, VideoListItem, VideoDetailResponse
+    StageResultResponse, VideoListItem, VideoDetailResponse,
+    PromptTemplateResponse, PromptUpdateRequest,
+    PromptPresetResponse, PromptPresetCreateRequest, PromptPresetUpdateRequest,
+    RegenerateBlogRequest,
 )
-from .pipeline.nodes import run_pipeline, CancelledError
+from .pipeline.nodes import run_pipeline, generate_blog_only, DEFAULT_TEMPLATES, CancelledError
 from .pipeline.sse_manager import sse_manager
+from .pipeline.sources import (
+    SourceAdapter, VideoFileAdapter, AudioFileAdapter, UrlAdapter, get_adapter
+)
 
 # Track cancelled task IDs
-_cancelled_tasks: set[str] = set()
+_cancelled_tasks: Set[str] = set()
 
 
 @asynccontextmanager
@@ -40,7 +48,8 @@ app.add_middleware(
 )
 
 
-async def _run_pipeline_task(task_id: str, video_path: str):
+async def _run_pipeline_task(task_id: str, adapter: SourceAdapter,
+                            system_prompt=None, user_prompt=None):
     async with async_session() as db:
         result = await db.execute(select(Video).where(Video.id == task_id))
         video = result.scalar_one_or_none()
@@ -60,7 +69,9 @@ async def _run_pipeline_task(task_id: str, video_path: str):
             video.status = TaskStatus.EXTRACTING_AUDIO.value
             await db.commit()
 
-            state = await run_pipeline(task_id, video_path, on_status_change=update_status, is_cancelled=is_cancelled)
+            state = await run_pipeline(task_id, adapter, on_status_change=update_status,
+                                       is_cancelled=is_cancelled,
+                                       system_prompt=system_prompt, user_prompt=user_prompt)
 
             for seg in state.get("segments", []):
                 t = Transcript(
@@ -137,7 +148,11 @@ async def _run_pipeline_task(task_id: str, video_path: str):
                 "html": blog_html,
             }))
 
-            video.title = blog_title or video.filename
+            # If the adapter supplied a title (e.g. yt-dlp video title) and the
+            # blog generation didn't produce one, fall back to it.
+            suggested = state.get("suggested_title", "")
+            final_title = blog_title or video.title or suggested or video.filename
+            video.title = final_title
             video.duration = state.get("duration", 0)
             video.processing_duration = time.time() - start_time
             video.status = TaskStatus.COMPLETED.value
@@ -174,22 +189,94 @@ async def _run_pipeline_task(task_id: str, video_path: str):
 
 
 @app.post("/api/upload")
-async def upload_video(file: UploadFile = File(...), background_tasks: BackgroundTasks = None):
+async def upload_file(file: UploadFile = File(...), background_tasks: BackgroundTasks = None,
+                      preset_id: Optional[int] = Form(None)):
+    """Unified upload endpoint for both video and audio files.
+
+    Detects the source type from the file's content type and routes to the
+    appropriate adapter. Video files are stored under VIDEOS_DIR; audio files
+    under AUDIO_DIR with a ``_raw`` suffix until normalized to WAV.
+    """
     task_id = str(uuid.uuid4())
-    ext = Path(file.filename).suffix or ".mp4"
-    video_path = VIDEOS_DIR / f"{task_id}{ext}"
-    async with aiofiles.open(video_path, "wb") as f:
+    content_type = (file.content_type or "").lower()
+    filename = file.filename or "upload"
+
+    # Decide source type from MIME prefix
+    if content_type.startswith("audio/") or _has_audio_ext(filename):
+        source_type = "audio"
+        ext = Path(filename).suffix.lower() or ".wav"
+        raw_path = AUDIO_DIR / f"{task_id}_raw{ext}"
+        save_path = raw_path
+    else:
+        # Default to video for video/* or unknown content types (backward compat)
+        source_type = "video"
+        ext = Path(filename).suffix.lower() or ".mp4"
+        save_path = VIDEOS_DIR / f"{task_id}{ext}"
+
+    async with aiofiles.open(save_path, "wb") as f:
         while chunk := await file.read(1024 * 1024 * 10):
             await f.write(chunk)
 
     async with async_session() as db:
-        video = Video(id=task_id, filename=file.filename, status="pending")
+        video = Video(
+            id=task_id,
+            filename=filename,
+            status="pending",
+            source_type=source_type,
+            preset_id=preset_id,
+        )
         db.add(video)
         await db.commit()
 
-    background_tasks.add_task(_run_pipeline_task, task_id, str(video_path))
+    if source_type == "audio":
+        adapter = AudioFileAdapter(str(raw_path), original_filename=filename)
+    else:
+        adapter = VideoFileAdapter(str(save_path))
+
+    system_prompt, user_prompt = await _resolve_preset_prompts(preset_id)
+    background_tasks.add_task(_run_pipeline_task, task_id, adapter, system_prompt, user_prompt)
     return TaskResponse(task_id=task_id, status="pending",
-                        message="Video uploaded, processing started")
+                        message=f"{source_type.capitalize()} uploaded, processing started")
+
+
+def _has_audio_ext(filename: str) -> bool:
+    """Heuristic: treat common audio extensions as audio even if the browser
+    reports a generic content type."""
+    audio_exts = {".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac", ".wma",
+                  ".opus", ".aiff", ".aif"}
+    return Path(filename).suffix.lower() in audio_exts
+
+
+from pydantic import BaseModel, HttpUrl  # noqa: E402
+
+class UrlUploadRequest(BaseModel):
+    url: HttpUrl
+    audio_only: bool = True
+    preset_id: Optional[int] = None
+
+@app.post("/api/upload/url")
+async def upload_url(req: UrlUploadRequest = Body(...), background_tasks: BackgroundTasks = None):
+    """Submit a URL (YouTube/Bilibili/etc.) for processing via yt-dlp."""
+    task_id = str(uuid.uuid4())
+    url = str(req.url)
+
+    async with async_session() as db:
+        video = Video(
+            id=task_id,
+            filename=url,
+            status="pending",
+            source_type="url",
+            source_url=url,
+            preset_id=req.preset_id,
+        )
+        db.add(video)
+        await db.commit()
+
+    adapter = UrlAdapter(url, audio_only=req.audio_only)
+    system_prompt, user_prompt = await _resolve_preset_prompts(req.preset_id)
+    background_tasks.add_task(_run_pipeline_task, task_id, adapter, system_prompt, user_prompt)
+    return TaskResponse(task_id=task_id, status="pending",
+                        message="URL submitted, processing started")
 
 
 @app.post("/api/task/{task_id}/cancel")
@@ -270,6 +357,8 @@ async def list_videos(
                 filename=v.filename, status=v.status,
                 duration=v.duration, processing_duration=v.processing_duration,
                 has_blog=has_blog,
+                source_type=v.source_type or "video",
+                source_url=v.source_url or "",
                 created_at=v.created_at,
             ))
         return items
@@ -312,6 +401,8 @@ async def get_video_detail(video_id: str):
             task_id=video.id, title=video.title or video.filename,
             filename=video.filename, status=video.status,
             duration=video.duration, processing_duration=video.processing_duration,
+            source_type=video.source_type or "video",
+            source_url=video.source_url or "",
             created_at=video.created_at,
             blog=blog_resp, transcript_segments=seg_count,
             chapters_count=ch_count, concepts_count=conc_count,
@@ -326,6 +417,9 @@ async def delete_video(video_id: str):
         if not video:
             return JSONResponse({"error": "Video not found"}, status_code=404)
 
+        source_type = video.source_type or "video"
+        source_url = video.source_url or ""
+
         for model in [Transcript, Topic, Concept, Blog, StageResult]:
             rows = await db.execute(select(model).where(model.video_id == video_id))
             for row in rows.scalars().all():
@@ -334,11 +428,25 @@ async def delete_video(video_id: str):
         await db.delete(video)
         await db.commit()
 
-    for ext in [".mp4", ".mkv", ".avi", ".mov", ".webm", ".flv"]:
-        p = VIDEOS_DIR / f"{video_id}{ext}"
-        if p.exists():
-            os.remove(p)
+    # Clean up source files based on source type
+    video_exts = [".mp4", ".mkv", ".avi", ".mov", ".webm", ".flv"]
+    audio_raw_exts = [".mp3", ".wav", ".m4a", ".aac", ".ogg", ".flac", ".wma",
+                      ".opus", ".aiff", ".aif"]
 
+    if source_type == "video":
+        for ext in video_exts:
+            p = VIDEOS_DIR / f"{video_id}{ext}"
+            if p.exists():
+                os.remove(p)
+    elif source_type == "audio":
+        # Raw uploaded audio files are stored with _raw suffix
+        for ext in audio_raw_exts:
+            p = AUDIO_DIR / f"{video_id}_raw{ext}"
+            if p.exists():
+                os.remove(p)
+    # URL source: no raw file to clean (yt-dlp output already renamed to {id}.wav)
+
+    # Always clean the normalized WAV
     audio_path = AUDIO_DIR / f"{video_id}.wav"
     if audio_path.exists():
         os.remove(audio_path)
@@ -354,14 +462,34 @@ async def reprocess_video(video_id: str, background_tasks: BackgroundTasks = Non
         if not video:
             return JSONResponse({"error": "Video not found"}, status_code=404)
 
-        video_path = None
-        for ext in [".mp4", ".mkv", ".avi", ".mov", ".webm", ".flv"]:
-            p = VIDEOS_DIR / f"{video_id}{ext}"
-            if p.exists():
-                video_path = str(p)
-                break
-        if not video_path:
-            return JSONResponse({"error": "Video file not found on disk"}, status_code=404)
+        source_type = video.source_type or "video"
+        source_url = video.source_url or ""
+
+        # Reconstruct the adapter from the stored source info
+        adapter: SourceAdapter
+        if source_type == "video":
+            video_path = None
+            for ext in [".mp4", ".mkv", ".avi", ".mov", ".webm", ".flv"]:
+                p = VIDEOS_DIR / f"{video_id}{ext}"
+                if p.exists():
+                    video_path = str(p)
+                    break
+            if not video_path:
+                return JSONResponse({"error": "Video file not found on disk"}, status_code=404)
+            adapter = VideoFileAdapter(video_path)
+        elif source_type == "audio":
+            # Original raw audio may have been deleted after normalization;
+            # reuse the normalized WAV if available, otherwise fail gracefully.
+            wav_path = AUDIO_DIR / f"{video_id}.wav"
+            if not wav_path.exists():
+                return JSONResponse({"error": "Audio file not found on disk"}, status_code=404)
+            adapter = AudioFileAdapter(str(wav_path), original_filename=video.filename or "")
+        elif source_type == "url":
+            if not source_url:
+                return JSONResponse({"error": "Original URL not recorded"}, status_code=404)
+            adapter = UrlAdapter(source_url, audio_only=True)
+        else:
+            return JSONResponse({"error": f"Unknown source type: {source_type}"}, status_code=400)
 
         for model in [Transcript, Topic, Concept, Blog, StageResult]:
             rows = await db.execute(select(model).where(model.video_id == video_id))
@@ -373,7 +501,7 @@ async def reprocess_video(video_id: str, background_tasks: BackgroundTasks = Non
         video.duration = 0
         await db.commit()
 
-    background_tasks.add_task(_run_pipeline_task, video_id, video_path)
+    background_tasks.add_task(_run_pipeline_task, video_id, adapter)
     return TaskResponse(task_id=video_id, status="pending",
                         message="Re-processing started")
 
@@ -393,6 +521,324 @@ async def get_blog(video_id: str):
             html=blog.html, quality_score=blog.quality_score,
             created_at=blog.created_at
         )
+
+
+# ─── Prompt Template APIs ─────────────────────────────────────────────────────
+
+@app.get("/api/prompts", response_model=List[PromptTemplateResponse])
+async def get_prompt_templates():
+    """List all prompt templates (DB entries merged with defaults)."""
+    templates: Dict[str, PromptTemplateResponse] = {}
+
+    # Fill defaults first
+    for tid, tdef in DEFAULT_TEMPLATES.items():
+        templates[tid] = PromptTemplateResponse(
+            id=tid, name=tdef["name"],
+            template=tdef["template"], description=tdef["description"],
+        )
+
+    # Override with DB entries
+    async with async_session() as db:
+        result = await db.execute(select(PromptTemplate))
+        for row in result.scalars().all():
+            templates[row.id] = PromptTemplateResponse(
+                id=row.id, name=row.name or row.id,
+                template=row.template, description=row.description or "",
+            )
+
+    return list(templates.values())
+
+
+@app.get("/api/prompts/{template_id}", response_model=PromptTemplateResponse)
+async def get_prompt_template(template_id: str):
+    """Get a single prompt template."""
+    async with async_session() as db:
+        result = await db.execute(
+            select(PromptTemplate).where(PromptTemplate.id == template_id)
+        )
+        row = result.scalar_one_or_none()
+        if row:
+            return PromptTemplateResponse(
+                id=row.id, name=row.name or row.id,
+                template=row.template, description=row.description or "",
+            )
+
+    # Fallback to defaults
+    default = DEFAULT_TEMPLATES.get(template_id)
+    if not default:
+        return JSONResponse({"error": "Template not found"}, status_code=404)
+    return PromptTemplateResponse(
+        id=template_id, name=default["name"],
+        template=default["template"], description=default["description"],
+    )
+
+
+@app.put("/api/prompts/{template_id}", response_model=PromptTemplateResponse)
+async def update_prompt_template(template_id: str, req: PromptUpdateRequest):
+    """Create or update a prompt template."""
+    now = datetime.now(timezone.utc)
+    async with async_session() as db:
+        result = await db.execute(
+            select(PromptTemplate).where(PromptTemplate.id == template_id)
+        )
+        row = result.scalar_one_or_none()
+        if row:
+            row.template = req.template
+            row.updated_at = now
+        else:
+            # Use default metadata if available
+            default = DEFAULT_TEMPLATES.get(template_id, {})
+            row = PromptTemplate(
+                id=template_id,
+                name=default.get("name", template_id),
+                description=default.get("description", ""),
+                template=req.template,
+                created_at=now,
+                updated_at=now,
+            )
+            db.add(row)
+        await db.commit()
+        await db.refresh(row)
+
+    return PromptTemplateResponse(
+        id=row.id, name=row.name,
+        template=row.template, description=row.description,
+    )
+
+
+# ─── Blog Regeneration API ────────────────────────────────────────────────────
+
+
+# ─── Prompt Presets CRUD ─────────────────────────────────────────────────────
+
+@app.get("/api/presets", response_model=List[PromptPresetResponse])
+async def list_presets():
+    """List all prompt presets."""
+    async with async_session() as db:
+        result = await db.execute(select(PromptPreset).order_by(PromptPreset.id))
+        rows = result.scalars().all()
+        return [
+            PromptPresetResponse(
+                id=r.id, name=r.name, description=r.description,
+                system_prompt=r.system_prompt, user_prompt=r.user_prompt,
+                is_default=r.is_default,
+                created_at=r.created_at, updated_at=r.updated_at,
+            ) for r in rows
+        ]
+
+
+@app.post("/api/presets", response_model=PromptPresetResponse)
+async def create_preset(req: PromptPresetCreateRequest):
+    """Create a new prompt preset."""
+    async with async_session() as db:
+        # If marking as default, clear other defaults first
+        if req.is_default:
+            await db.execute(
+                PromptPreset.__table__.update().where(PromptPreset.is_default == True).values(is_default=False)
+            )
+        preset = PromptPreset(
+            name=req.name, description=req.description,
+            system_prompt=req.system_prompt, user_prompt=req.user_prompt,
+            is_default=req.is_default,
+        )
+        db.add(preset)
+        await db.commit()
+        await db.refresh(preset)
+        return PromptPresetResponse(
+            id=preset.id, name=preset.name, description=preset.description,
+            system_prompt=preset.system_prompt, user_prompt=preset.user_prompt,
+            is_default=preset.is_default,
+            created_at=preset.created_at, updated_at=preset.updated_at,
+        )
+
+
+@app.put("/api/presets/{preset_id}", response_model=PromptPresetResponse)
+async def update_preset(preset_id: int, req: PromptPresetUpdateRequest):
+    """Update a prompt preset."""
+    async with async_session() as db:
+        result = await db.execute(select(PromptPreset).where(PromptPreset.id == preset_id))
+        preset = result.scalar_one_or_none()
+        if not preset:
+            return JSONResponse({"error": "Preset not found"}, status_code=404)
+        if req.name is not None:
+            preset.name = req.name
+        if req.description is not None:
+            preset.description = req.description
+        if req.system_prompt is not None:
+            preset.system_prompt = req.system_prompt
+        if req.user_prompt is not None:
+            preset.user_prompt = req.user_prompt
+        if req.is_default is not None:
+            if req.is_default:
+                await db.execute(
+                    PromptPreset.__table__.update().where(PromptPreset.is_default == True).values(is_default=False)
+                )
+            preset.is_default = req.is_default
+        preset.updated_at = datetime.now(timezone.utc)
+        await db.commit()
+        await db.refresh(preset)
+        return PromptPresetResponse(
+            id=preset.id, name=preset.name, description=preset.description,
+            system_prompt=preset.system_prompt, user_prompt=preset.user_prompt,
+            is_default=preset.is_default,
+            created_at=preset.created_at, updated_at=preset.updated_at,
+        )
+
+
+@app.delete("/api/presets/{preset_id}")
+async def delete_preset(preset_id: int):
+    """Delete a prompt preset. Cannot delete the current default."""
+    async with async_session() as db:
+        result = await db.execute(select(PromptPreset).where(PromptPreset.id == preset_id))
+        preset = result.scalar_one_or_none()
+        if not preset:
+            return JSONResponse({"error": "Preset not found"}, status_code=404)
+        if preset.is_default:
+            return JSONResponse({"error": "Cannot delete the default preset"}, status_code=400)
+        await db.delete(preset)
+        await db.commit()
+        return {"ok": True}
+
+async def _resolve_preset_prompts(preset_id):
+    """Load system_prompt and user_prompt from a preset ID. Returns (None, None) if not found."""
+    if preset_id is None:
+        return None, None
+    async with async_session() as db:
+        result = await db.execute(select(PromptPreset).where(PromptPreset.id == preset_id))
+        preset = result.scalar_one_or_none()
+        if not preset:
+            return None, None
+        return preset.system_prompt, preset.user_prompt
+
+
+async def _regenerate_blog_task(video_id: str, system_prompt=None, user_prompt=None):
+    """Background task: regenerate blog from existing stage results."""
+    import mistune
+    async with async_session() as db:
+        # Load existing stage results
+        sr_result = await db.execute(
+            select(StageResult).where(StageResult.video_id == video_id)
+            .order_by(StageResult.id.desc())
+        )
+        stage_map: Dict[str, StageResult] = {}
+        for sr in sr_result.scalars().all():
+            if sr.stage not in stage_map:
+                stage_map[sr.stage] = sr
+
+        transcript_sr = stage_map.get("transcript")
+        chapters_sr = stage_map.get("chapters")
+        knowledge_sr = stage_map.get("knowledge")
+
+        if not transcript_sr:
+            return
+
+        transcript_data = json.loads(transcript_sr.data_json)
+        transcript = transcript_data.get("transcript", "")
+        chapters_data = json.loads(chapters_sr.data_json) if chapters_sr else {}
+        chapters = chapters_data.get("chapters", [])
+        knowledge = json.loads(knowledge_sr.data_json) if knowledge_sr else {}
+
+        # Update video status
+        result = await db.execute(select(Video).where(Video.id == video_id))
+        video = result.scalar_one_or_none()
+        if not video:
+            return
+        video.status = TaskStatus.GENERATING_BLOG.value
+        await db.commit()
+
+    try:
+        state = await generate_blog_only(video_id, transcript, chapters, knowledge,
+                                        system_prompt=system_prompt, user_prompt=user_prompt)
+        blog_md = state.get("blog_markdown", "")
+        blog_title = state.get("blog_title", "")
+
+        abstract = ""
+        for line in blog_md.split("\n"):
+            clean = line.strip()
+            if clean and not clean.startswith("#") and len(clean) > 20:
+                abstract = clean[:200]
+                break
+
+        blog_html = mistune.html(blog_md)
+
+        async with async_session() as db:
+            # Delete old blog entries for this video
+            old_blogs = await db.execute(select(Blog).where(Blog.video_id == video_id))
+            for old in old_blogs.scalars().all():
+                await db.delete(old)
+
+            blog = Blog(
+                video_id=video_id, title=blog_title, abstract=abstract,
+                markdown=blog_md, html=blog_html,
+            )
+            db.add(blog)
+
+            # Update stage_results blog entry
+            old_blog_sr = await db.execute(
+                select(StageResult).where(
+                    StageResult.video_id == video_id,
+                    StageResult.stage == "blog",
+                )
+            )
+            for old_sr in old_blog_sr.scalars().all():
+                await db.delete(old_sr)
+
+            sr = StageResult(
+                video_id=video_id, stage="blog",
+                data_json=json.dumps({
+                    "markdown": blog_md, "title": blog_title, "html": blog_html,
+                }, ensure_ascii=False),
+            )
+            db.add(sr)
+
+            result = await db.execute(select(Video).where(Video.id == video_id))
+            video = result.scalar_one_or_none()
+            if video:
+                video.title = blog_title or video.title
+                video.status = TaskStatus.COMPLETED.value
+            await db.commit()
+
+        await sse_manager.emit(video_id, "complete", {"blog_id": blog.id if blog else 0})
+
+    except Exception as e:
+        async with async_session() as db:
+            result = await db.execute(select(Video).where(Video.id == video_id))
+            video = result.scalar_one_or_none()
+            if video:
+                video.status = TaskStatus.FAILED.value
+                await db.commit()
+        await sse_manager.emit(video_id, "step_error",
+            {"step": "generate_blog", "message": str(e)[:500]})
+
+
+@app.post("/api/videos/{video_id}/regenerate-blog")
+async def regenerate_blog(video_id: str, background_tasks: BackgroundTasks, req: Optional[RegenerateBlogRequest] = None):
+    """Regenerate ONLY the blog post from existing transcript/chapters/knowledge."""
+    async with async_session() as db:
+        result = await db.execute(select(Video).where(Video.id == video_id))
+        video = result.scalar_one_or_none()
+        if not video:
+            return JSONResponse({"error": "Video not found"}, status_code=404)
+
+        # Check that stage results exist
+        sr_result = await db.execute(
+            select(StageResult).where(
+                StageResult.video_id == video_id,
+                StageResult.stage == "transcript",
+            )
+        )
+        if not sr_result.scalar_one_or_none():
+            return JSONResponse({"error": "No transcript found. Run full pipeline first."}, status_code=400)
+
+        video.status = TaskStatus.GENERATING_BLOG.value
+        await db.commit()
+
+    # Resolve preset prompts
+    preset_id = req.preset_id if req else None
+    system_prompt, user_prompt = await _resolve_preset_prompts(preset_id)
+    background_tasks.add_task(_regenerate_blog_task, video_id, system_prompt, user_prompt)
+    return TaskResponse(task_id=video_id, status="generating_blog",
+                        message="Blog regeneration started")
 
 
 @app.post("/api/export/md")

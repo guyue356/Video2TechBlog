@@ -4,12 +4,15 @@ import { useState, useRef, useCallback, useEffect } from "react";
 import dynamic from "next/dynamic";
 import { useStageData, type TabKey } from "./useStageData";
 import StageViewer from "./StageViewer";
+import PromptSettings from "./PromptSettings";
+import PresetSelector from "./PresetSelector";
+import PresetManager from "./PresetManager";
 
 const MarkdownRenderer = dynamic(() => import("./MarkdownRenderer"), {
   loading: () => <div className="animate-pulse h-64 bg-zinc-100 rounded-lg" />,
 });
 
-const API_BASE = "http://localhost:8000";
+const API_BASE = "http://localhost:8001";
 
 const STEPS = [
   "extract_audio",
@@ -43,6 +46,8 @@ interface VideoItem {
   duration: number;
   processing_duration: number | null;
   has_blog: boolean;
+  source_type: string;
+  source_url: string;
   created_at: string | null;
 }
 
@@ -53,12 +58,26 @@ interface VideoDetail {
   status: string;
   duration: number;
   processing_duration: number | null;
+  source_type: string;
+  source_url: string;
   created_at: string | null;
   blog: { id: number; title: string; markdown: string } | null;
   transcript_segments: number;
   chapters_count: number;
   concepts_count: number;
 }
+
+const SOURCE_LABELS: Record<string, string> = {
+  video: "视频",
+  audio: "音频",
+  url: "链接",
+};
+
+const SOURCE_COLORS: Record<string, string> = {
+  video: "bg-sky-100 text-sky-600",
+  audio: "bg-teal-100 text-teal-700",
+  url: "bg-purple-100 text-purple-700",
+};
 
 const STATUS_LABELS: Record<string, string> = {
   completed: "已完成",
@@ -77,11 +96,11 @@ const STATUS_COLORS: Record<string, string> = {
   failed: "bg-red-100 text-red-700",
   cancelled: "bg-zinc-200 text-zinc-600",
   pending: "bg-yellow-100 text-yellow-700",
-  extracting_audio: "bg-blue-100 text-blue-700",
-  transcribing: "bg-blue-100 text-blue-700",
-  segmenting: "bg-blue-100 text-blue-700",
-  extracting_knowledge: "bg-blue-100 text-blue-700",
-  generating_blog: "bg-blue-100 text-blue-700",
+  extracting_audio: "bg-sky-100 text-sky-600",
+  transcribing: "bg-sky-100 text-sky-600",
+  segmenting: "bg-sky-100 text-sky-600",
+  extracting_knowledge: "bg-sky-100 text-sky-600",
+  generating_blog: "bg-sky-100 text-sky-600",
 };
 
 function formatDuration(sec: number): string {
@@ -110,6 +129,9 @@ export default function Home() {
   const [taskId, setTaskId] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
+  const [uploadMode, setUploadMode] = useState<"file" | "url">("file");
+  const [urlInput, setUrlInput] = useState("");
+  const [urlSubmitting, setUrlSubmitting] = useState(false);
   const [steps, setSteps] = useState<Record<string, StepState>>({});
   const [transcript, setTranscript] = useState("");
   const [chapters, setChapters] = useState<Array<Record<string, unknown>>>([]);
@@ -137,6 +159,12 @@ export default function Home() {
   const [assetDetailTab, setAssetDetailTab] = useState<TabKey>("video");
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null);
   const [loadingAssets, setLoadingAssets] = useState(false);
+  const [showPromptSettings, setShowPromptSettings] = useState(false);
+  const [regenerating, setRegenerating] = useState(false);
+  const [presetId, setPresetId] = useState<number | null>(null);
+  const [showPresetManager, setShowPresetManager] = useState(false);
+  const [regenerateDialogVideoId, setRegenerateDialogVideoId] = useState<string | null>(null);
+  const [regeneratePresetId, setRegeneratePresetId] = useState<number | null>(null);
 
   const initSteps = useCallback(() => {
     const s: Record<string, StepState> = {};
@@ -220,6 +248,59 @@ export default function Home() {
     } catch { /* ignore */ }
   }, [initSteps, doneStage, detailStage]);
 
+  // Regenerate blog only (keeps transcript/chapters/knowledge)
+  const handleRegenerate = useCallback(async (videoId: string, regPresetId?: number | null) => {
+    setRegenerating(true);
+    setRegenerateDialogVideoId(null);
+    try {
+      const body: Record<string, unknown> = {};
+      if (regPresetId) body.preset_id = regPresetId;
+      const res = await fetch(`${API_BASE}/api/videos/${videoId}/regenerate-blog`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
+      if (!res.ok) {
+        setRegenerating(false);
+        return;
+      }
+
+      // Monitor SSE for completion
+      const es = new EventSource(`${API_BASE}/api/task/${videoId}/stream`);
+      es.addEventListener("step_progress", (e) => {
+        // Blog generation progress updates
+      });
+      es.addEventListener("step_result", (e) => {
+        const data = JSON.parse(e.data);
+        if (data.step === "generate_blog") {
+          // Refresh stage data
+          detailStage.fetchStageData(videoId);
+        }
+      });
+      es.addEventListener("complete", () => {
+        es.close();
+        setRegenerating(false);
+        // Refresh video list and detail
+        fetchVideoList();
+        if (selectedVideo?.task_id === videoId) {
+          fetch(`${API_BASE}/api/videos/${videoId}`)
+            .then((r) => r.json())
+            .then((d: VideoDetail) => setSelectedVideo(d));
+        }
+      });
+      es.addEventListener("step_error", () => {
+        es.close();
+        setRegenerating(false);
+      });
+      es.onerror = () => {
+        es.close();
+        setRegenerating(false);
+      };
+    } catch {
+      setRegenerating(false);
+    }
+  }, [detailStage.fetchStageData, fetchVideoList, selectedVideo]);
+
   const handleUpload = async (file: File) => {
     setUploading(true);
     setUploadProgress(0);
@@ -238,6 +319,7 @@ export default function Home() {
 
     const formData = new FormData();
     formData.append("file", file);
+    if (presetId !== null) formData.append("preset_id", String(presetId));
 
     const xhr = new XMLHttpRequest();
     xhr.upload.addEventListener("progress", (e) => {
@@ -264,8 +346,58 @@ export default function Home() {
       setUploading(false);
     });
 
+    // Unified /api/upload handles both video and audio — the backend
+    // auto-detects the source type from the content type / extension.
     xhr.open("POST", `${API_BASE}/api/upload`);
     xhr.send(formData);
+  };
+
+  const handleUrlSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const url = urlInput.trim();
+    if (!url) return;
+
+    // Basic URL validation
+    try {
+      new URL(url);
+    } catch {
+      setError("请输入有效的链接");
+      return;
+    }
+
+    setUrlSubmitting(true);
+    setError("");
+    setElapsed(0);
+    elapsedRef.current = 0;
+    initSteps();
+    setTranscript("");
+    setChapters([]);
+    setKnowledge({});
+    setBlogMd("");
+    setBlogId(null);
+    setPhase("processing");
+    setActiveTab("blog");
+    doneStage.reset();
+
+    try {
+      const res = await fetch(`${API_BASE}/api/upload/url`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url, audio_only: true, preset_id: presetId }),
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setTaskId(data.task_id);
+      } else {
+        setError("链接提交失败");
+        setPhase("upload");
+      }
+    } catch {
+      setError("网络错误，请重试");
+      setPhase("upload");
+    } finally {
+      setUrlSubmitting(false);
+    }
   };
 
   // Timer for elapsed time during processing
@@ -410,7 +542,8 @@ export default function Home() {
     (e: React.DragEvent) => {
       e.preventDefault();
       const file = e.dataTransfer.files[0];
-      if (file && file.type.startsWith("video/")) {
+      // Accept both video and audio files
+      if (file && (file.type.startsWith("video/") || file.type.startsWith("audio/"))) {
         handleUpload(file);
       }
     },
@@ -536,14 +669,14 @@ export default function Home() {
         <div>
           <h2 className="text-xl font-semibold">资产管理</h2>
           <p className="text-sm text-zinc-500">
-            浏览、查看和管理所有已处理的视频
+            浏览、查看和管理所有已处理的内容（视频/音频/链接）
           </p>
         </div>
         <button
           onClick={() => { setView("upload"); setPhase("upload"); }}
-          className="px-4 py-2 bg-blue-600 hover:bg-blue-500 rounded-lg text-sm font-medium transition-colors"
+          className="px-4 py-2 bg-sky-400 hover:bg-sky-400 rounded-lg text-sm font-medium transition-colors"
         >
-          + 新建视频
+          + 新建任务
         </button>
       </div>
 
@@ -554,12 +687,12 @@ export default function Home() {
           placeholder="按标题或文件名搜索..."
           value={assetSearch}
           onChange={(e) => setAssetSearch(e.target.value)}
-          className="flex-1 bg-zinc-50 border border-zinc-300 rounded-lg px-4 py-2 text-sm text-zinc-800 placeholder-zinc-500 focus:outline-none focus:border-blue-500"
+          className="flex-1 bg-zinc-50 border border-zinc-300 rounded-lg px-4 py-2 text-sm text-zinc-800 placeholder-zinc-500 focus:outline-none focus:border-sky-400"
         />
         <select
           value={assetStatusFilter}
           onChange={(e) => setAssetStatusFilter(e.target.value)}
-          className="bg-zinc-50 border border-zinc-300 rounded-lg px-4 py-2 text-sm text-zinc-800 focus:outline-none focus:border-blue-500"
+          className="bg-zinc-50 border border-zinc-300 rounded-lg px-4 py-2 text-sm text-zinc-800 focus:outline-none focus:border-sky-400"
         >
           <option value="">全部状态</option>
           <option value="completed">已完成</option>
@@ -581,8 +714,8 @@ export default function Home() {
       ) : videoList.length === 0 ? (
         <div className="text-center py-20">
           <div className="text-4xl mb-3 text-zinc-400">[ ]</div>
-          <p className="text-zinc-500">暂无视频</p>
-          <p className="text-xs text-zinc-400 mt-1">上传视频即可开始</p>
+          <p className="text-zinc-500">暂无内容</p>
+          <p className="text-xs text-zinc-400 mt-1">上传视频、音频或链接即可开始</p>
         </div>
       ) : (
         <div className="grid gap-3">
@@ -599,6 +732,9 @@ export default function Home() {
                     </h3>
                     <span className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${STATUS_COLORS[v.status] || "bg-zinc-300 text-zinc-400"}`}>
                       {STATUS_LABELS[v.status] || v.status}
+                    </span>
+                    <span className={`inline-block px-2 py-0.5 rounded text-xs font-medium ${SOURCE_COLORS[v.source_type] || "bg-zinc-100 text-zinc-500"}`}>
+                      {SOURCE_LABELS[v.source_type] || v.source_type}
                     </span>
                     {v.has_blog && (
                       <span className="inline-block px-2 py-0.5 rounded text-xs font-medium bg-purple-100 text-purple-700">
@@ -618,7 +754,7 @@ export default function Home() {
                 <div className="flex items-center gap-2 shrink-0">
                   <button
                     onClick={() => fetchVideoDetail(v.task_id)}
-                    className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 rounded-lg text-xs font-medium transition-colors"
+                    className="px-3 py-1.5 bg-sky-400 hover:bg-sky-400 rounded-lg text-xs font-medium transition-colors"
                   >
                     详情
                   </button>
@@ -799,6 +935,8 @@ export default function Home() {
             blogMarkdown={v.blog?.markdown}
             blogId={v.blog?.id}
             exportHandlers={detailExportHandlers}
+            onRegenerate={v.status === "completed" ? () => { setRegenerateDialogVideoId(v.task_id); setRegeneratePresetId(presetId); } : undefined}
+            regenerating={regenerating}
           />
         )}
       </div>
@@ -813,7 +951,7 @@ export default function Home() {
           <div>
             <h1 className="text-lg font-semibold tracking-tight">Video2TechBlog</h1>
             <p className="text-xs text-zinc-500">
-              将视频转化为可发表的文章
+              将视频、音频或链接转化为可发表的文章
             </p>
           </div>
           <nav className="flex gap-1 ml-4">
@@ -839,7 +977,59 @@ export default function Home() {
             </button>
           </nav>
         </div>
+        <button
+          onClick={() => setShowPromptSettings(true)}
+          className="p-2 hover:bg-zinc-100 rounded-lg transition-colors"
+          title="提示词设置"
+        >
+          <svg className="w-5 h-5 text-zinc-500" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M9.594 3.94c.09-.542.56-.94 1.11-.94h2.593c.55 0 1.02.398 1.11.94l.213 1.281c.063.374.313.686.645.87.074.04.147.083.22.127.324.196.72.257 1.075.124l1.217-.456a1.125 1.125 0 011.37.49l1.296 2.247a1.125 1.125 0 01-.26 1.431l-1.003.827c-.293.24-.438.613-.431.992a6.759 6.759 0 010 .255c-.007.378.138.75.43.99l1.005.828c.424.35.534.954.26 1.43l-1.298 2.247a1.125 1.125 0 01-1.369.491l-1.217-.456c-.355-.133-.75-.072-1.076.124a6.57 6.57 0 01-.22.128c-.331.183-.581.495-.644.869l-.213 1.28c-.09.543-.56.941-1.11.941h-2.594c-.55 0-1.02-.398-1.11-.94l-.213-1.281c-.062-.374-.312-.686-.644-.87a6.52 6.52 0 01-.22-.127c-.325-.196-.72-.257-1.076-.124l-1.217.456a1.125 1.125 0 01-1.369-.49l-1.297-2.247a1.125 1.125 0 01.26-1.431l1.004-.827c.292-.24.437-.613.43-.992a6.932 6.932 0 010-.255c.007-.378-.138-.75-.43-.99l-1.004-.828a1.125 1.125 0 01-.26-1.43l1.297-2.247a1.125 1.125 0 011.37-.491l1.216.456c.356.133.751.072 1.076-.124.072-.044.146-.087.22-.128.332-.183.582-.495.644-.869l.214-1.281z" />
+            <path strokeLinecap="round" strokeLinejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+          </svg>
+        </button>
       </header>
+
+      {/* Prompt Settings Modal */}
+      <PromptSettings open={showPromptSettings} onClose={() => setShowPromptSettings(false)} />
+      <PresetManager
+        open={showPresetManager}
+        onClose={() => setShowPresetManager(false)}
+        onPresetsChanged={() => window.dispatchEvent(new Event("presets-refresh"))}
+      />
+
+      {/* Regenerate dialog with preset selection */}
+      {regenerateDialogVideoId && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50" onClick={() => setRegenerateDialogVideoId(null)}>
+          <div className="bg-white border border-zinc-200 rounded-xl p-6 max-w-md w-full mx-4 shadow-xl" onClick={(e) => e.stopPropagation()}>
+            <h3 className="text-lg font-semibold mb-4">重新生成博客</h3>
+            <div className="mb-4">
+              <label className="block text-sm font-medium text-zinc-700 mb-2">选择提示词预设</label>
+              <PresetSelector
+                value={regeneratePresetId}
+                onChange={setRegeneratePresetId}
+                onManageClick={() => setShowPresetManager(true)}
+              />
+            </div>
+            <p className="text-xs text-zinc-500 mb-4">
+              将使用所选预设的提示词重新生成博客，保留已有的转录、章节和知识数据。
+            </p>
+            <div className="flex justify-end gap-3">
+              <button
+                onClick={() => setRegenerateDialogVideoId(null)}
+                className="px-4 py-2 bg-zinc-200 hover:bg-zinc-300 rounded-lg text-sm transition-colors"
+              >
+                取消
+              </button>
+              <button
+                onClick={() => handleRegenerate(regenerateDialogVideoId, regeneratePresetId)}
+                className="px-4 py-2 bg-sky-500 hover:bg-sky-600 rounded-lg text-sm font-medium text-white transition-colors"
+              >
+                确认生成
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Delete confirmation modal */}
       {deleteConfirm && (
@@ -850,7 +1040,7 @@ export default function Home() {
               此操作将永久删除以下内容：
             </p>
             <ul className="text-sm text-zinc-600 list-disc list-inside mb-4">
-              <li>视频文件</li>
+              <li>原始上传文件（视频/音频/链接缓存）</li>
               <li>提取的音频</li>
               <li>转录文本、章节、知识点</li>
               <li>生成的博客</li>
@@ -897,7 +1087,7 @@ export default function Home() {
                     <li
                       key={key}
                       className={`relative pl-10 pr-3 py-2.5 rounded-lg transition-all duration-300 ${
-                        isActive ? "bg-blue-50/80" : ""
+                        isActive ? "bg-sky-50/80" : ""
                       }`}
                     >
                       {/* Step indicator circle */}
@@ -907,7 +1097,7 @@ export default function Home() {
                             isCompleted
                               ? "bg-emerald-500 text-white shadow-sm shadow-emerald-200"
                               : isActive
-                                ? "bg-blue-600 text-white animate-pulse-ring shadow-sm shadow-blue-200"
+                                ? "bg-sky-400 text-white animate-pulse-ring shadow-sm shadow-sky-200"
                                 : isError
                                   ? "bg-red-500 text-white shadow-sm shadow-red-200"
                                   : "bg-white border-2 border-zinc-300 text-zinc-400"
@@ -936,7 +1126,7 @@ export default function Home() {
                       <div className="min-w-0">
                         <div className="flex items-center gap-2">
                           <span className={`text-sm font-medium truncate ${
-                            isActive ? "text-blue-700"
+                            isActive ? "text-sky-600"
                             : isCompleted ? "text-zinc-500"
                             : isError ? "text-red-600"
                             : "text-zinc-400"
@@ -944,7 +1134,7 @@ export default function Home() {
                             {STEP_LABELS[key]}
                           </span>
                           {isActive && s.progressPct > 0 && (
-                            <span className="ml-auto text-xs font-mono font-semibold text-blue-600 tabular-nums">
+                            <span className="ml-auto text-xs font-mono font-semibold text-sky-400 tabular-nums">
                               {s.progressPct}%
                             </span>
                           )}
@@ -962,7 +1152,7 @@ export default function Home() {
 
                         {/* Active step progress bar */}
                         {isActive && s.progressPct > 0 && (
-                          <div className="mt-2 w-full bg-blue-100 rounded-full h-1.5 overflow-hidden">
+                          <div className="mt-2 w-full bg-sky-100 rounded-full h-1.5 overflow-hidden">
                             <div
                               className="animate-shimmer h-1.5 rounded-full transition-all duration-500 ease-out"
                               style={{ width: `${s.progressPct}%` }}
@@ -993,44 +1183,109 @@ export default function Home() {
           {view === "upload" && phase === "upload" && (
             <div className="max-w-2xl mx-auto mt-20">
               <div className="text-center mb-8">
-                <h2 className="text-2xl font-bold mb-2">上传视频</h2>
+                <h2 className="text-2xl font-bold mb-2">上传内容</h2>
                 <p className="text-zinc-500">
-                  支持 MP4、MOV、AVI 格式，最大 500MB。
-                  系统将自动提取音频、转录语音，并生成可发表的博客。
+                  支持视频文件、音频文件或媒体链接（YouTube/Bilibili 等）。
+                  系统将自动转录语音，并生成可发表的博客。
                 </p>
               </div>
 
-              <div
-                onDrop={handleDrop}
-                onDragOver={(e) => e.preventDefault()}
-                onClick={() => fileInputRef.current?.click()}
-                className="border-2 border-dashed border-zinc-300 rounded-xl p-12 text-center cursor-pointer
-                  hover:border-blue-500 hover:bg-blue-500/5 transition-colors"
-              >
-                {uploading ? (
-                  <div>
-                    <div className="w-full bg-zinc-200 rounded-full h-2 mb-4">
-                      <div
-                        className="bg-blue-500 h-2 rounded-full transition-all"
-                        style={{ width: `${uploadProgress}%` }}
-                      />
-                    </div>
-                    <p className="text-zinc-400">上传中... {uploadProgress}%</p>
-                  </div>
-                ) : (
-                  <div>
-                    <div className="text-4xl mb-3">+</div>
-                    <p className="text-zinc-400">点击或拖拽视频文件到此处</p>
-                  </div>
-                )}
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept="video/*"
-                  className="hidden"
-                  onChange={handleFileSelect}
+              {/* Preset selector */}
+              <div className="flex items-center justify-center gap-2 mb-4">
+                <span className="text-sm text-zinc-500">提示词预设:</span>
+                <PresetSelector
+                  value={presetId}
+                  onChange={setPresetId}
+                  onManageClick={() => setShowPresetManager(true)}
                 />
               </div>
+
+              {/* Mode switcher */}
+              <div className="flex justify-center gap-2 mb-6">
+                <button
+                  onClick={() => { setUploadMode("file"); setError(""); }}
+                  className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                    uploadMode === "file"
+                      ? "bg-sky-400 text-white"
+                      : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200"
+                  }`}
+                >
+                  文件上传
+                </button>
+                <button
+                  onClick={() => { setUploadMode("url"); setError(""); }}
+                  className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                    uploadMode === "url"
+                      ? "bg-sky-400 text-white"
+                      : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200"
+                  }`}
+                >
+                  链接输入
+                </button>
+              </div>
+
+              {uploadMode === "file" ? (
+                <div
+                  onDrop={handleDrop}
+                  onDragOver={(e) => e.preventDefault()}
+                  onClick={() => fileInputRef.current?.click()}
+                  className="border-2 border-dashed border-zinc-300 rounded-xl p-12 text-center cursor-pointer
+                    hover:border-sky-400 hover:bg-sky-400/5 transition-colors"
+                >
+                  {uploading ? (
+                    <div>
+                      <div className="w-full bg-zinc-200 rounded-full h-2 mb-4">
+                        <div
+                          className="bg-sky-400 h-2 rounded-full transition-all"
+                          style={{ width: `${uploadProgress}%` }}
+                        />
+                      </div>
+                      <p className="text-zinc-400">上传中... {uploadProgress}%</p>
+                    </div>
+                  ) : (
+                    <div>
+                      <div className="text-4xl mb-3">+</div>
+                      <p className="text-zinc-400">点击或拖拽视频/音频文件到此处</p>
+                      <p className="text-xs text-zinc-400 mt-2">
+                        支持 MP4/MOV/AVI/MKV 视频，MP3/WAV/M4A/AAC/FLAC 等音频
+                      </p>
+                    </div>
+                  )}
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept="video/*,audio/*"
+                    className="hidden"
+                    onChange={handleFileSelect}
+                  />
+                </div>
+              ) : (
+                <form onSubmit={handleUrlSubmit} className="space-y-4">
+                  <div className="border-2 border-dashed border-zinc-300 rounded-xl p-8">
+                    <label className="block text-sm font-medium text-zinc-700 mb-2">
+                      媒体链接
+                    </label>
+                    <input
+                      type="url"
+                      placeholder="粘贴视频或音频链接（YouTube/Bilibili/抖音/播客 RSS 等）"
+                      value={urlInput}
+                      onChange={(e) => setUrlInput(e.target.value)}
+                      className="w-full bg-zinc-50 border border-zinc-300 rounded-lg px-4 py-3 text-sm text-zinc-800 placeholder-zinc-500 focus:outline-none focus:border-sky-400"
+                      autoFocus
+                    />
+                    <p className="text-xs text-zinc-400 mt-2">
+                      链接将由 yt-dlp 下载音频轨道后转录。部分平台可能需要登录，详见 FAQ。
+                    </p>
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={urlSubmitting || !urlInput.trim()}
+                    className="w-full px-4 py-3 bg-sky-400 hover:bg-sky-400 disabled:bg-zinc-300 disabled:cursor-not-allowed rounded-lg text-sm font-medium text-white transition-colors"
+                  >
+                    {urlSubmitting ? "提交中..." : "开始处理"}
+                  </button>
+                </form>
+              )}
 
               {error && (
                 <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-lg text-red-600 text-sm">
@@ -1046,8 +1301,8 @@ export default function Home() {
               <div className="bg-white border border-zinc-200 rounded-xl shadow-sm p-6 mb-6">
                 <div className="flex items-center justify-between mb-4">
                   <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-full bg-blue-100 flex items-center justify-center">
-                      <svg className="w-5 h-5 text-blue-600 animate-spin-slow" fill="none" viewBox="0 0 24 24">
+                    <div className="w-10 h-10 rounded-full bg-sky-100 flex items-center justify-center">
+                      <svg className="w-5 h-5 text-sky-400 animate-spin-slow" fill="none" viewBox="0 0 24 24">
                         <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
                         <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
                       </svg>
@@ -1085,7 +1340,7 @@ export default function Home() {
                   <span className="text-xs text-zinc-500">
                     {completedSteps}/{STEPS.length} 步骤完成
                   </span>
-                  <span className="text-xs font-mono font-semibold text-blue-600 tabular-nums">
+                  <span className="text-xs font-mono font-semibold text-sky-400 tabular-nums">
                     {overallPct}%
                   </span>
                 </div>
@@ -1189,7 +1444,7 @@ export default function Home() {
                   onClick={() => { setPhase("upload"); setTaskId(null); doneStage.reset(); }}
                   className="px-4 py-2 bg-zinc-200 hover:bg-zinc-300 rounded-lg text-sm transition-colors"
                 >
-                  新建视频
+                  新建任务
                 </button>
               </div>
 

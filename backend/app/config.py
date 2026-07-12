@@ -32,4 +32,9 @@ WHISPER_DEVICE, WHISPER_COMPUTE_TYPE = _detect_whisper_device()
 print(f"[Whisper] Device: {WHISPER_DEVICE}, Compute: {WHISPER_COMPUTE_TYPE}")
 WHISPER_LANGUAGE = os.getenv("WHISPER_LANGUAGE", "zh")
 MAX_VIDEO_SIZE_MB = 500
+MAX_AUDIO_SIZE_MB = 500
 AUDIO_SAMPLE_RATE = 16000
+# Optional: path to a cookies file for yt-dlp (needed by some platforms
+# like YouTube for age-restricted or members-only content). Leave empty to
+# disable.
+YTDLP_COOKIES_PATH = os.getenv("YTDLP_COOKIES_PATH", "")
