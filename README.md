@@ -339,12 +339,12 @@ WHISPER_LANGUAGE=zh
 1. 检查 Conda、Node.js、ffmpeg 是否安装
 2. 创建 `video2techblog` Conda 环境（Python 3.10）
 3. 安装 Python 和 Node.js 依赖
-4. 在同一窗口启动后端（端口 8001）和前端（端口 3000）
+4. 在同一窗口启动后端（端口 8000）和前端（端口 3001）
 
 启动后访问：
 
-- **前端界面**：http://localhost:3000
-- **API 文档**：http://localhost:8001/docs
+- **前端界面**：http://localhost:3001
+- **API 文档**：http://localhost:8000/docs
 
 ### 方式二：手动启动
 
@@ -358,7 +358,7 @@ uvicorn app.main:app --reload --port 8001
 # 终端 2：启动前端
 cd frontend
 npm install
-npm run dev
+npm run dev --port 3001
 ```
 
 ---
@@ -367,7 +367,7 @@ npm run dev
 
 ### 上传内容
 
-1. 打开 http://localhost:3000
+1. 打开 http://localhost:3001
 2. 选择输入方式：
    - **文件上传**：拖拽视频/音频文件到上传区域，或点击选择文件
    - **URL 链接**：粘贴 Bilibili、YouTube 等平台的视频链接

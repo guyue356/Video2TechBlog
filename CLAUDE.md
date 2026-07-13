@@ -20,8 +20,8 @@ Prerequisites: Conda, Node.js, ffmpeg. Creates conda env `video2techblog` (Pytho
 cd backend && conda activate video2techblog && pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8000
 
-# Frontend (port 3000)
-cd frontend && npm install && npm run dev
+# Frontend (port 3001)
+cd frontend && npm install && npm run dev --port 3001
 ```
 
 ### Frontend scripts
@@ -66,7 +66,7 @@ Entire UI is a single `page.tsx` component (1300+ lines, "use client"). Two view
 - LLM calls use `urllib.request` directly, not the `openai` pip package (listed in requirements but unused)
 - ffmpeg is located at `D:\hsj\Github\ffmpeg\bin\ffmpeg.exe` with fallback paths in `nodes.py`
 - Frontend communicates with backend at `http://localhost:8000` (hardcoded `API_BASE` in page.tsx)
-- CORS configured for `http://localhost:3000` only
+- CORS configured for `http://localhost:3001` only
 
 ## Environment
 

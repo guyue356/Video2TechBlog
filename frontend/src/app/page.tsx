@@ -12,7 +12,7 @@ const MarkdownRenderer = dynamic(() => import("./MarkdownRenderer"), {
   loading: () => <div className="animate-pulse h-64 bg-zinc-100 rounded-lg" />,
 });
 
-const API_BASE = "http://localhost:8001";
+const API_BASE = "http://localhost:8000";
 
 const STEPS = [
   "extract_audio",

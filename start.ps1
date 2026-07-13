@@ -153,13 +153,13 @@ Pop-Location
 
 # ---- Check if ports are already in use ----
 $port8000 = Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue
-$port3000 = Get-NetTCPConnection -LocalPort 3000 -ErrorAction SilentlyContinue
+$port3001 = Get-NetTCPConnection -LocalPort 3001 -ErrorAction SilentlyContinue
 
-if ($port8000 -or $port3000) {
+if ($port8000 -or $port3001) {
     Write-Host ""
     Write-Host "[Warn] Port already in use:" -ForegroundColor DarkYellow
     if ($port8000) { Write-Host "  - Port 8000 (Backend) is in use" -ForegroundColor DarkYellow }
-    if ($port3000) { Write-Host "  - Port 3000 (Frontend) is in use" -ForegroundColor DarkYellow }
+    if ($port3001) { Write-Host "  - Port 3001 (Frontend) is in use" -ForegroundColor DarkYellow }
     Write-Host ""
     $continue = Read-Host "Continue anyway? (y/N)"
     if ($continue -ne "y" -and $continue -ne "Y") {
@@ -198,7 +198,7 @@ $frontendJob = Start-Job -ScriptBlock {
 }
 
 Write-Host "[Backend]  Job $($backendJob.Id) -> http://localhost:8000" -ForegroundColor Green
-Write-Host "[Frontend] Job $($frontendJob.Id) -> http://localhost:3000" -ForegroundColor Green
+Write-Host "[Frontend] Job $($frontendJob.Id) -> http://localhost:3001" -ForegroundColor Green
 Write-Host ""
 Write-Host "Press Ctrl+C or close this window to stop both servers." -ForegroundColor DarkGray
 Write-Host ("=" * 44) -ForegroundColor Cyan
@@ -262,14 +262,14 @@ Start-Process powershell -ArgumentList "-NoExit", "-File", "`"$runnerPath`""
 Write-Host "[Servers]  Launched in single window" -ForegroundColor Green
 
 # Wait a bit for servers to start, then open browser
-Write-Host "[Browser] Opening http://localhost:3000 in 5 seconds..." -ForegroundColor DarkCyan
+Write-Host "[Browser] Opening http://localhost:3001 in 5 seconds..." -ForegroundColor DarkCyan
 Start-Sleep -Seconds 5
-Start-Process "http://localhost:3000"
+Start-Process "http://localhost:3001"
 
 Write-Host ""
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host "  Servers launched!" -ForegroundColor Green
-Write-Host "  Frontend: http://localhost:3000" -ForegroundColor White
+Write-Host "  Frontend: http://localhost:3001" -ForegroundColor White
 Write-Host "  Backend API docs: http://localhost:8000/docs" -ForegroundColor White
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host ""
