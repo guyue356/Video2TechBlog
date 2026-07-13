@@ -152,13 +152,13 @@ Write-Host "[Install] Node.js dependencies ready" -ForegroundColor Green
 Pop-Location
 
 # ---- Check if ports are already in use ----
-$port8000 = Get-NetTCPConnection -LocalPort 8000 -ErrorAction SilentlyContinue
+$port8001 = Get-NetTCPConnection -LocalPort 8001 -ErrorAction SilentlyContinue
 $port3001 = Get-NetTCPConnection -LocalPort 3001 -ErrorAction SilentlyContinue
 
-if ($port8000 -or $port3001) {
+if ($port8001 -or $port3001) {
     Write-Host ""
     Write-Host "[Warn] Port already in use:" -ForegroundColor DarkYellow
-    if ($port8000) { Write-Host "  - Port 8000 (Backend) is in use" -ForegroundColor DarkYellow }
+    if ($port8001) { Write-Host "  - Port 8001 (Backend) is in use" -ForegroundColor DarkYellow }
     if ($port3001) { Write-Host "  - Port 3001 (Frontend) is in use" -ForegroundColor DarkYellow }
     Write-Host ""
     $continue = Read-Host "Continue anyway? (y/N)"
@@ -188,7 +188,7 @@ $condaEnv    = '__ENV__'
 # Start backend job
 $backendJob = Start-Job -ScriptBlock {
     Set-Location $using:backendDir
-    & conda run -n $using:condaEnv --no-capture-output python -m uvicorn app.main:app --reload --port 8000 2>&1
+    & conda run -n $using:condaEnv --no-capture-output python -m uvicorn app.main:app --reload --port 8001 2>&1
 }
 
 # Start frontend job
@@ -197,7 +197,7 @@ $frontendJob = Start-Job -ScriptBlock {
     & npm run dev 2>&1
 }
 
-Write-Host "[Backend]  Job $($backendJob.Id) -> http://localhost:8000" -ForegroundColor Green
+Write-Host "[Backend]  Job $($backendJob.Id) -> http://localhost:8001" -ForegroundColor Green
 Write-Host "[Frontend] Job $($frontendJob.Id) -> http://localhost:3001" -ForegroundColor Green
 Write-Host ""
 Write-Host "Press Ctrl+C or close this window to stop both servers." -ForegroundColor DarkGray
@@ -270,7 +270,7 @@ Write-Host ""
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host "  Servers launched!" -ForegroundColor Green
 Write-Host "  Frontend: http://localhost:3001" -ForegroundColor White
-Write-Host "  Backend API docs: http://localhost:8000/docs" -ForegroundColor White
+Write-Host "  Backend API docs: http://localhost:8001/docs" -ForegroundColor White
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "Close the server window to stop both services."
