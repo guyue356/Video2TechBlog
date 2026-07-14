@@ -12,7 +12,7 @@ const MarkdownRenderer = dynamic(() => import("./MarkdownRenderer"), {
   loading: () => <div className="animate-pulse h-64 bg-zinc-100 rounded-lg" />,
 });
 
-const API_BASE = "http://localhost:8000";
+const API_BASE = "http://localhost:8001";
 
 const STEPS = [
   "extract_audio",
@@ -146,10 +146,14 @@ export default function Home() {
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const readerRef = useRef<EventSource | null>(null);
+  const doneStageRef = useRef<ReturnType<typeof useStageData> | null>(null);
 
   // Shared stage data hooks (one for "done" phase, one for asset detail)
   const doneStage = useStageData();
   const detailStage = useStageData();
+
+  // Keep ref in sync with latest doneStage (avoids stale closure in SSE useEffect)
+  doneStageRef.current = doneStage;
 
   // Asset management state
   const [videoList, setVideoList] = useState<VideoItem[]>([]);
@@ -526,8 +530,8 @@ export default function Home() {
         return next;
       });
       setPhase("done");
-      // Fetch stage data using the hook
-      doneStage.fetchStageData(taskId!);
+      // Fetch stage data using the ref (avoids re-running this effect on every render)
+      doneStageRef.current?.fetchStageData(taskId!);
       es.close();
     });
 
@@ -536,7 +540,7 @@ export default function Home() {
     return () => {
       es.close();
     };
-  }, [taskId, phase, initSteps, doneStage]);
+  }, [taskId, phase]);
 
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
