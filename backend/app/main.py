@@ -48,8 +48,14 @@ app.add_middleware(
 )
 
 
+def _normalize_asr_provider(provider: Optional[str]) -> str:
+    value = (provider or "whisper").strip().lower()
+    return value if value in {"whisper", "mimo"} else "whisper"
+
+
 async def _run_pipeline_task(task_id: str, adapter: SourceAdapter,
-                            system_prompt=None, user_prompt=None):
+                            system_prompt=None, user_prompt=None,
+                            asr_provider: str = "whisper"):
     async with async_session() as db:
         result = await db.execute(select(Video).where(Video.id == task_id))
         video = result.scalar_one_or_none()
@@ -71,7 +77,8 @@ async def _run_pipeline_task(task_id: str, adapter: SourceAdapter,
 
             state = await run_pipeline(task_id, adapter, on_status_change=update_status,
                                        is_cancelled=is_cancelled,
-                                       system_prompt=system_prompt, user_prompt=user_prompt)
+                                       system_prompt=system_prompt, user_prompt=user_prompt,
+                                       asr_provider=asr_provider)
 
             for seg in state.get("segments", []):
                 t = Transcript(
@@ -111,6 +118,7 @@ async def _run_pipeline_task(task_id: str, adapter: SourceAdapter,
                     "duration": state.get("duration", 0),
                 }),
                 ("transcript", {
+                    "asr_provider": state.get("asr_provider", "whisper"),
                     "transcript": state.get("transcript", ""),
                     "segments": state.get("segments", []),
                 }),
@@ -190,7 +198,8 @@ async def _run_pipeline_task(task_id: str, adapter: SourceAdapter,
 
 @app.post("/api/upload")
 async def upload_file(file: UploadFile = File(...), background_tasks: BackgroundTasks = None,
-                      preset_id: Optional[int] = Form(None)):
+                      preset_id: Optional[int] = Form(None),
+                      asr_provider: str = Form("whisper")):
     """Unified upload endpoint for both video and audio files.
 
     Detects the source type from the file's content type and routes to the
@@ -198,6 +207,7 @@ async def upload_file(file: UploadFile = File(...), background_tasks: Background
     under AUDIO_DIR with a ``_raw`` suffix until normalized to WAV.
     """
     task_id = str(uuid.uuid4())
+    asr_provider = _normalize_asr_provider(asr_provider)
     content_type = (file.content_type or "").lower()
     filename = file.filename or "upload"
 
@@ -234,7 +244,8 @@ async def upload_file(file: UploadFile = File(...), background_tasks: Background
         adapter = VideoFileAdapter(str(save_path))
 
     system_prompt, user_prompt = await _resolve_preset_prompts(preset_id)
-    background_tasks.add_task(_run_pipeline_task, task_id, adapter, system_prompt, user_prompt)
+    background_tasks.add_task(_run_pipeline_task, task_id, adapter, system_prompt,
+                              user_prompt, asr_provider)
     return TaskResponse(task_id=task_id, status="pending",
                         message=f"{source_type.capitalize()} uploaded, processing started")
 
@@ -253,12 +264,14 @@ class UrlUploadRequest(BaseModel):
     url: HttpUrl
     audio_only: bool = True
     preset_id: Optional[int] = None
+    asr_provider: str = "whisper"
 
 @app.post("/api/upload/url")
 async def upload_url(req: UrlUploadRequest = Body(...), background_tasks: BackgroundTasks = None):
     """Submit a URL (YouTube/Bilibili/etc.) for processing via yt-dlp."""
     task_id = str(uuid.uuid4())
     url = str(req.url)
+    asr_provider = _normalize_asr_provider(req.asr_provider)
 
     async with async_session() as db:
         video = Video(
@@ -274,7 +287,8 @@ async def upload_url(req: UrlUploadRequest = Body(...), background_tasks: Backgr
 
     adapter = UrlAdapter(url, audio_only=req.audio_only)
     system_prompt, user_prompt = await _resolve_preset_prompts(req.preset_id)
-    background_tasks.add_task(_run_pipeline_task, task_id, adapter, system_prompt, user_prompt)
+    background_tasks.add_task(_run_pipeline_task, task_id, adapter, system_prompt,
+                              user_prompt, asr_provider)
     return TaskResponse(task_id=task_id, status="pending",
                         message="URL submitted, processing started")
 

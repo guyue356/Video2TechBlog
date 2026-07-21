@@ -14,6 +14,8 @@ const MarkdownRenderer = dynamic(() => import("./MarkdownRenderer"), {
 
 const API_BASE = "http://localhost:8001";
 
+type AsrProvider = "whisper" | "mimo";
+
 const STEPS = [
   "extract_audio",
   "transcribe",
@@ -130,6 +132,7 @@ export default function Home() {
   const [uploading, setUploading] = useState(false);
   const [uploadProgress, setUploadProgress] = useState(0);
   const [uploadMode, setUploadMode] = useState<"file" | "url">("file");
+  const [asrProvider, setAsrProvider] = useState<AsrProvider>("whisper");
   const [urlInput, setUrlInput] = useState("");
   const [urlSubmitting, setUrlSubmitting] = useState(false);
   const [steps, setSteps] = useState<Record<string, StepState>>({});
@@ -323,6 +326,7 @@ export default function Home() {
 
     const formData = new FormData();
     formData.append("file", file);
+    formData.append("asr_provider", asrProvider);
     if (presetId !== null) formData.append("preset_id", String(presetId));
 
     const xhr = new XMLHttpRequest();
@@ -387,7 +391,12 @@ export default function Home() {
       const res = await fetch(`${API_BASE}/api/upload/url`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url, audio_only: true, preset_id: presetId }),
+        body: JSON.stringify({
+          url,
+          audio_only: true,
+          preset_id: presetId,
+          asr_provider: asrProvider,
+        }),
       });
       if (res.ok) {
         const data = await res.json();
@@ -1202,6 +1211,35 @@ export default function Home() {
                   onChange={setPresetId}
                   onManageClick={() => setShowPresetManager(true)}
                 />
+              </div>
+
+              {/* ASR provider selector */}
+              <div className="flex items-center justify-center gap-2 mb-6">
+                <span className="text-sm text-zinc-500">ASR</span>
+                <div className="inline-flex rounded-lg border border-zinc-200 bg-white p-1">
+                  <button
+                    type="button"
+                    onClick={() => setAsrProvider("whisper")}
+                    className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                      asrProvider === "whisper"
+                        ? "bg-zinc-900 text-white"
+                        : "text-zinc-600 hover:bg-zinc-100"
+                    }`}
+                  >
+                    Whisper
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAsrProvider("mimo")}
+                    className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                      asrProvider === "mimo"
+                        ? "bg-zinc-900 text-white"
+                        : "text-zinc-600 hover:bg-zinc-100"
+                    }`}
+                  >
+                    MIMO-ASR
+                  </button>
+                </div>
               </div>
 
               {/* Mode switcher */}

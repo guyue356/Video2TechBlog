@@ -16,7 +16,16 @@ for d in [VIDEOS_DIR, AUDIO_DIR, OUTPUT_DIR]:
 
 DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
 DEEPSEEK_BASE_URL = "https://api.deepseek.com/v1"
-DEEPSEEK_MODEL = "deepseek-v4-pro"
+DEEPSEEK_MODEL = "deepseek-chat"
+MIMO_API_KEY = os.getenv("MIMO_API_KEY", "")
+_default_mimo_base_url = (
+    "https://token-plan-cn.xiaomimimo.com/v1"
+    if MIMO_API_KEY.strip().startswith("tp-")
+    else "https://api.xiaomimimo.com/v1"
+)
+MIMO_BASE_URL = os.getenv("MIMO_BASE_URL", _default_mimo_base_url)
+MIMO_ASR_MODEL = os.getenv("MIMO_ASR_MODEL", "mimo-v2.5-asr")
+MIMO_ASR_LANGUAGE = os.getenv("MIMO_ASR_LANGUAGE", os.getenv("WHISPER_LANGUAGE", "zh"))
 WHISPER_MODEL_SIZE = "large-v3"
 def _detect_whisper_device():
     try:
