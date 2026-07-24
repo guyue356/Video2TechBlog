@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 
-const API_BASE = "http://localhost:8000";
+const API_BASE = "http://localhost:8001";
 
 interface Preset {
   id: number;
@@ -54,12 +54,14 @@ export default function PresetManager({ open, onClose, onPresetsChanged }: Prese
   }, []);
 
   useEffect(() => {
-    if (open) {
+    if (!open) return;
+    const timer = window.setTimeout(() => {
       fetchPresets();
       setEditingId(null);
       setCreating(false);
       setMessage(null);
-    }
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [open, fetchPresets]);
 
   const startCreate = () => {

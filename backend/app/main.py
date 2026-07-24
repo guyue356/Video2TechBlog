@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, UploadFile, File, Form, BackgroundTasks, Query, Body
 from fastapi.responses import JSONResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
-from sqlalchemy import select, func
+from sqlalchemy import select, func, update
 from sse_starlette.sse import EventSourceResponse
 
 from .config import VIDEOS_DIR, AUDIO_DIR, OUTPUT_DIR
@@ -41,7 +41,7 @@ app = FastAPI(title="Video2TechBlog", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3001"],
+    allow_origins=["http://localhost:3002"],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -51,6 +51,43 @@ app.add_middleware(
 def _normalize_asr_provider(provider: Optional[str]) -> str:
     value = (provider or "whisper").strip().lower()
     return value if value in {"whisper", "mimo"} else "whisper"
+
+
+def _adapter_for_video(video: Video) -> SourceAdapter:
+    """Rebuild a source adapter for an uploaded, persisted task."""
+    source_type = video.source_type or "video"
+
+    if source_type == "video":
+        suffix = Path(video.filename or "").suffix.lower()
+        candidates = []
+        if suffix:
+            candidates.append(VIDEOS_DIR / f"{video.id}{suffix}")
+        candidates.extend(VIDEOS_DIR.glob(f"{video.id}.*"))
+        video_path = next((path for path in candidates if path.is_file()), None)
+        if video_path is None:
+            raise FileNotFoundError("Video file not found on disk")
+        return VideoFileAdapter(str(video_path))
+
+    if source_type == "audio":
+        suffix = Path(video.filename or "").suffix.lower()
+        candidates = []
+        if suffix:
+            candidates.append(AUDIO_DIR / f"{video.id}_raw{suffix}")
+        candidates.extend(AUDIO_DIR.glob(f"{video.id}_raw.*"))
+        candidates.append(AUDIO_DIR / f"{video.id}.wav")
+        audio_path = next((path for path in candidates if path.is_file()), None)
+        if audio_path is None:
+            raise FileNotFoundError("Audio file not found on disk")
+        return AudioFileAdapter(
+            str(audio_path), original_filename=video.filename or ""
+        )
+
+    if source_type == "url":
+        if not video.source_url:
+            raise FileNotFoundError("Original URL not recorded")
+        return UrlAdapter(video.source_url, audio_only=True)
+
+    raise ValueError(f"Unknown source type: {source_type}")
 
 
 async def _run_pipeline_task(task_id: str, adapter: SourceAdapter,
@@ -197,9 +234,8 @@ async def _run_pipeline_task(task_id: str, adapter: SourceAdapter,
 
 
 @app.post("/api/upload")
-async def upload_file(file: UploadFile = File(...), background_tasks: BackgroundTasks = None,
-                      preset_id: Optional[int] = Form(None),
-                      asr_provider: str = Form("whisper")):
+async def upload_file(file: UploadFile = File(...),
+                      preset_id: Optional[int] = Form(None)):
     """Unified upload endpoint for both video and audio files.
 
     Detects the source type from the file's content type and routes to the
@@ -207,7 +243,6 @@ async def upload_file(file: UploadFile = File(...), background_tasks: Background
     under AUDIO_DIR with a ``_raw`` suffix until normalized to WAV.
     """
     task_id = str(uuid.uuid4())
-    asr_provider = _normalize_asr_provider(asr_provider)
     content_type = (file.content_type or "").lower()
     filename = file.filename or "upload"
 
@@ -238,16 +273,8 @@ async def upload_file(file: UploadFile = File(...), background_tasks: Background
         db.add(video)
         await db.commit()
 
-    if source_type == "audio":
-        adapter = AudioFileAdapter(str(raw_path), original_filename=filename)
-    else:
-        adapter = VideoFileAdapter(str(save_path))
-
-    system_prompt, user_prompt = await _resolve_preset_prompts(preset_id)
-    background_tasks.add_task(_run_pipeline_task, task_id, adapter, system_prompt,
-                              user_prompt, asr_provider)
     return TaskResponse(task_id=task_id, status="pending",
-                        message=f"{source_type.capitalize()} uploaded, processing started")
+                        message=f"{source_type.capitalize()} uploaded, waiting to start")
 
 
 def _has_audio_ext(filename: str) -> bool:
@@ -264,14 +291,12 @@ class UrlUploadRequest(BaseModel):
     url: HttpUrl
     audio_only: bool = True
     preset_id: Optional[int] = None
-    asr_provider: str = "whisper"
 
 @app.post("/api/upload/url")
-async def upload_url(req: UrlUploadRequest = Body(...), background_tasks: BackgroundTasks = None):
-    """Submit a URL (YouTube/Bilibili/etc.) for processing via yt-dlp."""
+async def upload_url(req: UrlUploadRequest = Body(...)):
+    """Save a URL (YouTube/Bilibili/etc.) as a task that can be started later."""
     task_id = str(uuid.uuid4())
     url = str(req.url)
-    asr_provider = _normalize_asr_provider(req.asr_provider)
 
     async with async_session() as db:
         video = Video(
@@ -285,12 +310,63 @@ async def upload_url(req: UrlUploadRequest = Body(...), background_tasks: Backgr
         db.add(video)
         await db.commit()
 
-    adapter = UrlAdapter(url, audio_only=req.audio_only)
-    system_prompt, user_prompt = await _resolve_preset_prompts(req.preset_id)
-    background_tasks.add_task(_run_pipeline_task, task_id, adapter, system_prompt,
-                              user_prompt, asr_provider)
     return TaskResponse(task_id=task_id, status="pending",
-                        message="URL submitted, processing started")
+                        message="URL submitted, waiting to start")
+
+
+class StartTaskRequest(BaseModel):
+    asr_provider: str = "whisper"
+
+
+@app.post("/api/task/{task_id}/start")
+async def start_task(task_id: str, req: StartTaskRequest = Body(...),
+                     background_tasks: BackgroundTasks = None):
+    """Start a previously uploaded task exactly once."""
+    async with async_session() as db:
+        result = await db.execute(select(Video).where(Video.id == task_id))
+        video = result.scalar_one_or_none()
+        if not video:
+            return JSONResponse({"error": "Task not found"}, status_code=404)
+        if video.status != TaskStatus.PENDING.value:
+            return JSONResponse(
+                {"error": f"Task cannot be started from status: {video.status}"},
+                status_code=409,
+            )
+
+        try:
+            adapter = _adapter_for_video(video)
+        except FileNotFoundError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=404)
+        except ValueError as exc:
+            return JSONResponse({"error": str(exc)}, status_code=400)
+
+        claimed = await db.execute(
+            update(Video)
+            .where(Video.id == task_id, Video.status == TaskStatus.PENDING.value)
+            .values(
+                status=TaskStatus.EXTRACTING_AUDIO.value,
+                processing_duration=None,
+            )
+        )
+        if claimed.rowcount != 1:
+            await db.rollback()
+            return JSONResponse({"error": "Task has already been started"}, status_code=409)
+        await db.commit()
+        preset_id = video.preset_id
+
+    _cancelled_tasks.discard(task_id)
+    sse_manager.remove(task_id)
+    sse_manager.get_queue(task_id)
+    system_prompt, user_prompt = await _resolve_preset_prompts(preset_id)
+    asr_provider = _normalize_asr_provider(req.asr_provider)
+    background_tasks.add_task(
+        _run_pipeline_task, task_id, adapter, system_prompt, user_prompt, asr_provider
+    )
+    return TaskResponse(
+        task_id=task_id,
+        status=TaskStatus.EXTRACTING_AUDIO.value,
+        message="Processing started",
+    )
 
 
 @app.post("/api/task/{task_id}/cancel")

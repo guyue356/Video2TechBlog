@@ -26,11 +26,9 @@ try { node --version 2>&1 | Out-Null } catch {
 }
 
 # ffmpeg (required for audio extraction)
-# Check: 1) system PATH, 2) project-local C:\ffmpeg\bin, 3) project-local D:\tools\ffmpeg\bin
 $hasFfmpeg = $false
 $ffmpegLocalPaths = @("D:\hsj\Github\ffmpeg\bin", "C:\ffmpeg\bin", "D:\tools\ffmpeg\bin", "$projectRoot\ffmpeg\bin")
 
-# Add local ffmpeg paths to PATH if they exist
 foreach ($p in $ffmpegLocalPaths) {
     if ((Test-Path "$p\ffmpeg.exe") -and ($env:PATH -notlike "*$p*")) {
         $env:PATH = "$p;$env:PATH"
@@ -153,13 +151,13 @@ Pop-Location
 
 # ---- Check if ports are already in use ----
 $port8001 = Get-NetTCPConnection -LocalPort 8001 -ErrorAction SilentlyContinue
-$port3001 = Get-NetTCPConnection -LocalPort 3001 -ErrorAction SilentlyContinue
+$port3002 = Get-NetTCPConnection -LocalPort 3002 -ErrorAction SilentlyContinue
 
-if ($port8001 -or $port3001) {
+if ($port8001 -or $port3002) {
     Write-Host ""
     Write-Host "[Warn] Port already in use:" -ForegroundColor DarkYellow
     if ($port8001) { Write-Host "  - Port 8001 (Backend) is in use" -ForegroundColor DarkYellow }
-    if ($port3001) { Write-Host "  - Port 3001 (Frontend) is in use" -ForegroundColor DarkYellow }
+    if ($port3002) { Write-Host "  - Port 3002 (Frontend) is in use" -ForegroundColor DarkYellow }
     Write-Host ""
     $continue = Read-Host "Continue anyway? (y/N)"
     if ($continue -ne "y" -and $continue -ne "Y") {
@@ -176,7 +174,6 @@ Write-Host "============================================" -ForegroundColor Cyan
 Write-Host ""
 
 # Write a PowerShell runner script to a temp file
-# Uses Start-Job for concurrent processes with real-time output
 $runnerPath = "$env:TEMP\v2tb_servers.ps1"
 $serverScript = @'
 $host.UI.RawUI.WindowTitle = "Video2TechBlog Servers"
@@ -198,16 +195,14 @@ $frontendJob = Start-Job -ScriptBlock {
 }
 
 Write-Host "[Backend]  Job $($backendJob.Id) -> http://localhost:8001" -ForegroundColor Green
-Write-Host "[Frontend] Job $($frontendJob.Id) -> http://localhost:3001" -ForegroundColor Green
+Write-Host "[Frontend] Job $($frontendJob.Id) -> http://localhost:3002" -ForegroundColor Green
 Write-Host ""
 Write-Host "Press Ctrl+C or close this window to stop both servers." -ForegroundColor DarkGray
 Write-Host ("=" * 44) -ForegroundColor Cyan
 Write-Host ""
 
-# Stream output from both jobs in real-time
 try {
     while ($true) {
-        # Check if either job failed
         if ($backendJob.State -eq 'Failed') {
             Write-Host "[Backend]  FAILED" -ForegroundColor Red
             Receive-Job $backendJob -ErrorAction SilentlyContinue
@@ -219,7 +214,6 @@ try {
             break
         }
 
-        # Receive and display new output from backend
         $bOut = Receive-Job $backendJob -ErrorAction SilentlyContinue
         if ($bOut) {
             foreach ($line in $bOut) {
@@ -228,7 +222,6 @@ try {
             }
         }
 
-        # Receive and display new output from frontend
         $fOut = Receive-Job $frontendJob -ErrorAction SilentlyContinue
         if ($fOut) {
             foreach ($line in $fOut) {
@@ -240,7 +233,11 @@ try {
         Start-Sleep -Milliseconds 500
     }
 } finally {
-    # Cleanup: stop both jobs
+    # Kill all descendant processes (children of this powershell.exe)
+    # Start-Job children are grandchildren of the runner; Stop-Job alone won't kill them
+    Get-CimInstance Win32_Process | Where-Object { $_.ParentProcessId -eq $PID } | ForEach-Object {
+        & taskkill /F /T /PID $_.ProcessId 2>$null
+    }
     Stop-Job $backendJob -ErrorAction SilentlyContinue
     Stop-Job $frontendJob -ErrorAction SilentlyContinue
     Remove-Job $backendJob -Force -ErrorAction SilentlyContinue
@@ -261,15 +258,58 @@ $serverScript | Out-File -FilePath $runnerPath -Encoding UTF8
 Start-Process powershell -ArgumentList "-NoExit", "-File", "`"$runnerPath`""
 Write-Host "[Servers]  Launched in single window" -ForegroundColor Green
 
-# Wait a bit for servers to start, then open browser
-Write-Host "[Browser] Opening http://localhost:3001 in 5 seconds..." -ForegroundColor DarkCyan
-Start-Sleep -Seconds 5
-Start-Process "http://localhost:3001"
+# Wait until both servers respond, then open browser
+function Test-HttpReady {
+    param(
+        [Parameter(Mandatory = $true)]
+        [string]$Url
+    )
+
+    try {
+        $response = Invoke-WebRequest -Uri $Url -UseBasicParsing -TimeoutSec 2 -ErrorAction Stop
+        return ($response.StatusCode -ge 200 -and $response.StatusCode -lt 500)
+    } catch {
+        return $false
+    }
+}
+
+$backendUrl = "http://localhost:8001/docs"
+$frontendUrl = "http://localhost:3002"
+$timeoutSeconds = 120
+$deadline = (Get-Date).AddSeconds($timeoutSeconds)
+$backendReady = $false
+$frontendReady = $false
+
+Write-Host "[Browser] Waiting for backend and frontend to be ready..." -ForegroundColor DarkCyan
+while ((Get-Date) -lt $deadline) {
+    if (-not $backendReady) {
+        $backendReady = Test-HttpReady $backendUrl
+        if ($backendReady) { Write-Host "[Ready] Backend API responding at $backendUrl" -ForegroundColor Green }
+    }
+
+    if (-not $frontendReady) {
+        $frontendReady = Test-HttpReady $frontendUrl
+        if ($frontendReady) { Write-Host "[Ready] Frontend responding at $frontendUrl" -ForegroundColor Green }
+    }
+
+    if ($backendReady -and $frontendReady) { break }
+    Start-Sleep -Seconds 2
+}
+
+if ($backendReady -and $frontendReady) {
+    Write-Host "[Browser] Opening $frontendUrl" -ForegroundColor DarkCyan
+    Start-Process $frontendUrl
+} else {
+    Write-Host "[Warn] Servers did not become ready within $timeoutSeconds seconds." -ForegroundColor DarkYellow
+    if (-not $backendReady) { Write-Host "  - Backend not ready: $backendUrl" -ForegroundColor DarkYellow }
+    if (-not $frontendReady) { Write-Host "  - Frontend not ready: $frontendUrl" -ForegroundColor DarkYellow }
+    Write-Host "Check the server window for startup errors, then open $frontendUrl manually once it is ready." -ForegroundColor Yellow
+}
 
 Write-Host ""
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host "  Servers launched!" -ForegroundColor Green
-Write-Host "  Frontend: http://localhost:3001" -ForegroundColor White
+Write-Host "  Frontend: http://localhost:3002" -ForegroundColor White
 Write-Host "  Backend API docs: http://localhost:8001/docs" -ForegroundColor White
 Write-Host "============================================" -ForegroundColor Cyan
 Write-Host ""

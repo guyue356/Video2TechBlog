@@ -38,6 +38,11 @@ interface StepState {
   detail: string;
   message: string;
   result: unknown;
+  apiProgress?: {
+    completed: number;
+    total: number;
+    current?: number;
+  };
 }
 
 interface VideoItem {
@@ -85,7 +90,7 @@ const STATUS_LABELS: Record<string, string> = {
   completed: "已完成",
   failed: "失败",
   cancelled: "已终止",
-  pending: "等待中",
+  pending: "待启动",
   extracting_audio: "提取音频",
   transcribing: "转录中",
   segmenting: "分段中",
@@ -135,6 +140,8 @@ export default function Home() {
   const [asrProvider, setAsrProvider] = useState<AsrProvider>("whisper");
   const [urlInput, setUrlInput] = useState("");
   const [urlSubmitting, setUrlSubmitting] = useState(false);
+  const [starting, setStarting] = useState(false);
+  const [uploadedName, setUploadedName] = useState("");
   const [steps, setSteps] = useState<Record<string, StepState>>({});
   const [transcript, setTranscript] = useState("");
   const [chapters, setChapters] = useState<Array<Record<string, unknown>>>([]);
@@ -156,7 +163,9 @@ export default function Home() {
   const detailStage = useStageData();
 
   // Keep ref in sync with latest doneStage (avoids stale closure in SSE useEffect)
-  doneStageRef.current = doneStage;
+  useEffect(() => {
+    doneStageRef.current = doneStage;
+  }, [doneStage]);
 
   // Asset management state
   const [videoList, setVideoList] = useState<VideoItem[]>([]);
@@ -198,7 +207,10 @@ export default function Home() {
 
   useEffect(() => {
     if (view === "assets" && !selectedVideo) {
-      fetchVideoList();
+      const timer = window.setTimeout(() => {
+        fetchVideoList();
+      }, 0);
+      return () => window.clearTimeout(timer);
     }
   }, [view, selectedVideo, fetchVideoList]);
 
@@ -255,6 +267,42 @@ export default function Home() {
     } catch { /* ignore */ }
   }, [initSteps, doneStage, detailStage]);
 
+  const handleStartTranscription = useCallback(async (videoId: string) => {
+    setStarting(true);
+    setError("");
+    try {
+      const res = await fetch(`${API_BASE}/api/task/${videoId}/start`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ asr_provider: asrProvider }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || "启动转录失败");
+      }
+
+      setView("upload");
+      setTaskId(videoId);
+      setSelectedVideo(null);
+      detailStage.reset();
+      initSteps();
+      setTranscript("");
+      setChapters([]);
+      setKnowledge({});
+      setBlogMd("");
+      setBlogId(null);
+      setElapsed(0);
+      elapsedRef.current = 0;
+      setActiveTab("blog");
+      doneStage.reset();
+      setPhase("processing");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "启动转录失败");
+    } finally {
+      setStarting(false);
+    }
+  }, [asrProvider, initSteps, doneStage, detailStage]);
+
   // Regenerate blog only (keeps transcript/chapters/knowledge)
   const handleRegenerate = useCallback(async (videoId: string, regPresetId?: number | null) => {
     setRegenerating(true);
@@ -274,7 +322,7 @@ export default function Home() {
 
       // Monitor SSE for completion
       const es = new EventSource(`${API_BASE}/api/task/${videoId}/stream`);
-      es.addEventListener("step_progress", (e) => {
+      es.addEventListener("step_progress", () => {
         // Blog generation progress updates
       });
       es.addEventListener("step_result", (e) => {
@@ -312,21 +360,11 @@ export default function Home() {
     setUploading(true);
     setUploadProgress(0);
     setError("");
-    setElapsed(0);
-    elapsedRef.current = 0;
-    initSteps();
-    setTranscript("");
-    setChapters([]);
-    setKnowledge({});
-    setBlogMd("");
-    setBlogId(null);
-    setPhase("processing");
-    setActiveTab("blog");
-    doneStage.reset();
+    setTaskId(null);
+    setUploadedName("");
 
     const formData = new FormData();
     formData.append("file", file);
-    formData.append("asr_provider", asrProvider);
     if (presetId !== null) formData.append("preset_id", String(presetId));
 
     const xhr = new XMLHttpRequest();
@@ -340,7 +378,9 @@ export default function Home() {
       if (xhr.status === 200) {
         const data = JSON.parse(xhr.responseText);
         setTaskId(data.task_id);
+        setUploadedName(file.name);
         setUploading(false);
+        setPhase("upload");
       } else {
         setError("上传失败");
         setPhase("upload");
@@ -354,8 +394,8 @@ export default function Home() {
       setUploading(false);
     });
 
-    // Unified /api/upload handles both video and audio — the backend
-    // auto-detects the source type from the content type / extension.
+    // The upload endpoint only persists the file. Processing begins after the
+    // user explicitly clicks "开始转录".
     xhr.open("POST", `${API_BASE}/api/upload`);
     xhr.send(formData);
   };
@@ -375,17 +415,8 @@ export default function Home() {
 
     setUrlSubmitting(true);
     setError("");
-    setElapsed(0);
-    elapsedRef.current = 0;
-    initSteps();
-    setTranscript("");
-    setChapters([]);
-    setKnowledge({});
-    setBlogMd("");
-    setBlogId(null);
-    setPhase("processing");
-    setActiveTab("blog");
-    doneStage.reset();
+    setTaskId(null);
+    setUploadedName("");
 
     try {
       const res = await fetch(`${API_BASE}/api/upload/url`, {
@@ -395,12 +426,13 @@ export default function Home() {
           url,
           audio_only: true,
           preset_id: presetId,
-          asr_provider: asrProvider,
         }),
       });
       if (res.ok) {
         const data = await res.json();
         setTaskId(data.task_id);
+        setUploadedName(url);
+        setPhase("upload");
       } else {
         setError("链接提交失败");
         setPhase("upload");
@@ -416,12 +448,21 @@ export default function Home() {
   // Timer for elapsed time during processing
   useEffect(() => {
     if (phase === "processing") {
-      elapsedRef.current = 0;
-      setElapsed(0);
-      timerRef.current = setInterval(() => {
-        elapsedRef.current += 1;
-        setElapsed(elapsedRef.current);
-      }, 1000);
+      const startTimer = window.setTimeout(() => {
+        elapsedRef.current = 0;
+        setElapsed(0);
+        timerRef.current = setInterval(() => {
+          elapsedRef.current += 1;
+          setElapsed(elapsedRef.current);
+        }, 1000);
+      }, 0);
+      return () => {
+        window.clearTimeout(startTimer);
+        if (timerRef.current) {
+          clearInterval(timerRef.current);
+          timerRef.current = null;
+        }
+      };
     } else {
       if (timerRef.current) {
         clearInterval(timerRef.current);
@@ -473,14 +514,25 @@ export default function Home() {
     es.addEventListener("step_progress", (e) => {
       const d = JSON.parse(e.data);
       if (STEPS.includes(d.step)) {
-        setSteps((prev) => ({
-          ...prev,
-          [d.step]: {
-            ...prev[d.step],
-            progressPct: d.progress_pct ?? prev[d.step].progressPct,
-            detail: d.detail ?? "",
-          },
-        }));
+        setSteps((prev) => {
+          const apiProgress = d.step === "transcribe" && typeof d.api_requests_total === "number"
+            ? {
+                completed: Number(d.api_requests_completed ?? 0),
+                total: Number(d.api_requests_total),
+                current: typeof d.api_request_current === "number" ? Number(d.api_request_current) : undefined,
+              }
+            : prev[d.step].apiProgress;
+
+          return {
+            ...prev,
+            [d.step]: {
+              ...prev[d.step],
+              progressPct: d.progress_pct ?? prev[d.step].progressPct,
+              detail: d.detail ?? "",
+              apiProgress,
+            },
+          };
+        });
         if (d.step === "generate_blog" && d.detail) {
           setBlogMd((prev) => prev + d.detail);
         }
@@ -490,16 +542,27 @@ export default function Home() {
     es.addEventListener("step_result", (e) => {
       const d = JSON.parse(e.data);
       if (STEPS.includes(d.step)) {
-        setSteps((prev) => ({
-          ...prev,
-          [d.step]: {
-            ...prev[d.step],
-            status: "completed",
-            result: d,
-            progressPct: 100,
-            detail: d.detail ?? prev[d.step].detail ?? "",
-          },
-        }));
+        setSteps((prev) => {
+          const apiProgress = d.step === "transcribe" && typeof d.api_requests_total === "number"
+            ? {
+                completed: Number(d.api_requests_completed ?? d.api_requests_total),
+                total: Number(d.api_requests_total),
+                current: typeof d.api_request_current === "number" ? Number(d.api_request_current) : undefined,
+              }
+            : prev[d.step].apiProgress;
+
+          return {
+            ...prev,
+            [d.step]: {
+              ...prev[d.step],
+              status: "completed",
+              result: d,
+              progressPct: 100,
+              detail: d.detail ?? prev[d.step].detail ?? "",
+              apiProgress,
+            },
+          };
+        });
         if (d.step === "transcribe" && d.transcript) {
           setTranscript(d.transcript);
         }
@@ -554,16 +617,18 @@ export default function Home() {
   const handleDrop = useCallback(
     (e: React.DragEvent) => {
       e.preventDefault();
+      if (taskId) return;
       const file = e.dataTransfer.files[0];
       // Accept both video and audio files
       if (file && (file.type.startsWith("video/") || file.type.startsWith("audio/"))) {
         handleUpload(file);
       }
     },
-    [handleUpload]
+    [handleUpload, taskId]
   );
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (taskId) return;
     const file = e.target.files?.[0];
     if (file) handleUpload(file);
   };
@@ -659,6 +724,7 @@ export default function Home() {
     }
     setPhase("upload");
     setTaskId(null);
+    setUploadedName("");
   };
 
   const activeStep = STEPS.find((k) => steps[k]?.status === "active");
@@ -686,12 +752,25 @@ export default function Home() {
           </p>
         </div>
         <button
-          onClick={() => { setView("upload"); setPhase("upload"); }}
+          onClick={() => {
+            setView("upload");
+            setPhase("upload");
+            setTaskId(null);
+            setUploadedName("");
+            setUrlInput("");
+            setError("");
+          }}
           className="px-4 py-2 bg-sky-400 hover:bg-sky-400 rounded-lg text-sm font-medium transition-colors"
         >
           + 新建任务
         </button>
       </div>
+
+      {error && (
+        <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-red-600 text-sm">
+          {error}
+        </div>
+      )}
 
       {/* Search & Filter */}
       <div className="flex gap-3 mb-4">
@@ -711,7 +790,7 @@ export default function Home() {
           <option value="completed">已完成</option>
           <option value="failed">失败</option>
           <option value="cancelled">已终止</option>
-          <option value="pending">等待中</option>
+          <option value="pending">待启动</option>
         </select>
         <button
           onClick={fetchVideoList}
@@ -771,7 +850,15 @@ export default function Home() {
                   >
                     详情
                   </button>
-                  {v.status === "completed" || v.status === "failed" || v.status === "cancelled" ? (
+                  {v.status === "pending" ? (
+                    <button
+                      onClick={() => handleStartTranscription(v.task_id)}
+                      disabled={starting}
+                      className="px-3 py-1.5 bg-sky-50 hover:bg-sky-100 disabled:opacity-50 text-sky-600 rounded-lg text-xs font-medium transition-colors"
+                    >
+                      开始转录
+                    </button>
+                  ) : v.status === "completed" || v.status === "failed" || v.status === "cancelled" ? (
                     <button
                       onClick={() => handleReprocess(v.task_id)}
                       className="px-3 py-1.5 bg-yellow-50 hover:bg-yellow-100 text-yellow-600 rounded-lg text-xs font-medium transition-colors"
@@ -876,6 +963,11 @@ export default function Home() {
 
     return (
       <div className="max-w-5xl mx-auto">
+        {error && (
+          <div className="mb-4 p-3 bg-red-50 border border-red-200 rounded-lg text-red-600 text-sm">
+            {error}
+          </div>
+        )}
         <div className="flex items-center gap-3 mb-6">
           <button
             onClick={() => { setSelectedVideo(null); detailStage.reset(); }}
@@ -898,12 +990,22 @@ export default function Home() {
             </div>
           </div>
           <div className="flex gap-2 shrink-0">
-            <button
-              onClick={() => handleReprocess(v.task_id)}
-              className="px-3 py-1.5 bg-yellow-50 hover:bg-yellow-100 text-yellow-600 rounded-lg text-xs font-medium transition-colors"
-            >
-              重新处理
-            </button>
+            {v.status === "pending" ? (
+              <button
+                onClick={() => handleStartTranscription(v.task_id)}
+                disabled={starting}
+                className="px-3 py-1.5 bg-sky-50 hover:bg-sky-100 disabled:opacity-50 text-sky-600 rounded-lg text-xs font-medium transition-colors"
+              >
+                {starting ? "启动中..." : "开始转录"}
+              </button>
+            ) : v.status === "completed" || v.status === "failed" || v.status === "cancelled" ? (
+              <button
+                onClick={() => handleReprocess(v.task_id)}
+                className="px-3 py-1.5 bg-yellow-50 hover:bg-yellow-100 text-yellow-600 rounded-lg text-xs font-medium transition-colors"
+              >
+                重新处理
+              </button>
+            ) : null}
             <button
               onClick={() => setDeleteConfirm(v.task_id)}
               className="px-3 py-1.5 bg-red-50 hover:bg-red-100 text-red-600 rounded-lg text-xs font-medium transition-colors"
@@ -969,7 +1071,16 @@ export default function Home() {
           </div>
           <nav className="flex gap-1 ml-4">
             <button
-              onClick={() => { setView("upload"); if (phase === "done") setPhase("upload"); }}
+              onClick={() => {
+                setView("upload");
+                if (phase === "done") {
+                  setPhase("upload");
+                  setTaskId(null);
+                  setUploadedName("");
+                  setUrlInput("");
+                  setError("");
+                }
+              }}
               className={`px-3 py-1.5 text-sm rounded-md transition-colors ${
                 view === "upload"
                   ? "bg-zinc-900 text-white"
@@ -1094,7 +1205,6 @@ export default function Home() {
                   const isActive = s?.status === "active";
                   const isCompleted = s?.status === "completed";
                   const isError = s?.status === "error";
-                  const isPending = !s || s.status === "pending";
 
                   return (
                     <li
@@ -1146,11 +1256,6 @@ export default function Home() {
                           }`}>
                             {STEP_LABELS[key]}
                           </span>
-                          {isActive && s.progressPct > 0 && (
-                            <span className="ml-auto text-xs font-mono font-semibold text-sky-400 tabular-nums">
-                              {s.progressPct}%
-                            </span>
-                          )}
                           {isCompleted && (
                             <span className="ml-auto text-xs font-mono font-semibold text-emerald-600 tabular-nums">
                               ✓
@@ -1161,16 +1266,6 @@ export default function Home() {
                         {/* Active step detail */}
                         {isActive && s.message && (
                           <p className="text-xs text-zinc-500 mt-1 truncate">{s.message}</p>
-                        )}
-
-                        {/* Active step progress bar */}
-                        {isActive && s.progressPct > 0 && (
-                          <div className="mt-2 w-full bg-sky-100 rounded-full h-1.5 overflow-hidden">
-                            <div
-                              className="animate-shimmer h-1.5 rounded-full transition-all duration-500 ease-out"
-                              style={{ width: `${s.progressPct}%` }}
-                            />
-                          </div>
                         )}
 
                         {/* Completed step detail */}
@@ -1199,7 +1294,7 @@ export default function Home() {
                 <h2 className="text-2xl font-bold mb-2">上传内容</h2>
                 <p className="text-zinc-500">
                   支持视频文件、音频文件或媒体链接（YouTube/Bilibili 等）。
-                  系统将自动转录语音，并生成可发表的博客。
+                  上传完成后，由你手动启动转录和博客生成。
                 </p>
               </div>
 
@@ -1246,21 +1341,23 @@ export default function Home() {
               <div className="flex justify-center gap-2 mb-6">
                 <button
                   onClick={() => { setUploadMode("file"); setError(""); }}
+                  disabled={Boolean(taskId)}
                   className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
                     uploadMode === "file"
                       ? "bg-sky-400 text-white"
                       : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200"
-                  }`}
+                  } disabled:opacity-50 disabled:cursor-not-allowed`}
                 >
                   文件上传
                 </button>
                 <button
                   onClick={() => { setUploadMode("url"); setError(""); }}
+                  disabled={Boolean(taskId)}
                   className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
                     uploadMode === "url"
                       ? "bg-sky-400 text-white"
                       : "bg-zinc-100 text-zinc-600 hover:bg-zinc-200"
-                  }`}
+                  } disabled:opacity-50 disabled:cursor-not-allowed`}
                 >
                   链接输入
                 </button>
@@ -1270,9 +1367,14 @@ export default function Home() {
                 <div
                   onDrop={handleDrop}
                   onDragOver={(e) => e.preventDefault()}
-                  onClick={() => fileInputRef.current?.click()}
-                  className="border-2 border-dashed border-zinc-300 rounded-xl p-12 text-center cursor-pointer
-                    hover:border-sky-400 hover:bg-sky-400/5 transition-colors"
+                  onClick={() => {
+                    if (!taskId) fileInputRef.current?.click();
+                  }}
+                  className={`border-2 border-dashed rounded-xl p-12 text-center transition-colors ${
+                    taskId
+                      ? "border-emerald-300 bg-emerald-50/50 cursor-default"
+                      : "border-zinc-300 cursor-pointer hover:border-sky-400 hover:bg-sky-400/5"
+                  }`}
                 >
                   {uploading ? (
                     <div>
@@ -1283,6 +1385,16 @@ export default function Home() {
                         />
                       </div>
                       <p className="text-zinc-400">上传中... {uploadProgress}%</p>
+                    </div>
+                  ) : taskId ? (
+                    <div>
+                      <div className="w-12 h-12 mx-auto mb-3 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center">
+                        <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+                        </svg>
+                      </div>
+                      <p className="font-medium text-emerald-700">上传成功</p>
+                      <p className="text-sm text-zinc-500 mt-1 break-all">{uploadedName}</p>
                     </div>
                   ) : (
                     <div>
@@ -1299,6 +1411,7 @@ export default function Home() {
                     accept="video/*,audio/*"
                     className="hidden"
                     onChange={handleFileSelect}
+                    disabled={Boolean(taskId)}
                   />
                 </div>
               ) : (
@@ -1313,6 +1426,7 @@ export default function Home() {
                       value={urlInput}
                       onChange={(e) => setUrlInput(e.target.value)}
                       className="w-full bg-zinc-50 border border-zinc-300 rounded-lg px-4 py-3 text-sm text-zinc-800 placeholder-zinc-500 focus:outline-none focus:border-sky-400"
+                      disabled={Boolean(taskId)}
                       autoFocus
                     />
                     <p className="text-xs text-zinc-400 mt-2">
@@ -1321,12 +1435,36 @@ export default function Home() {
                   </div>
                   <button
                     type="submit"
-                    disabled={urlSubmitting || !urlInput.trim()}
+                    disabled={urlSubmitting || !urlInput.trim() || Boolean(taskId)}
                     className="w-full px-4 py-3 bg-sky-400 hover:bg-sky-400 disabled:bg-zinc-300 disabled:cursor-not-allowed rounded-lg text-sm font-medium text-white transition-colors"
                   >
-                    {urlSubmitting ? "提交中..." : "开始处理"}
+                    {urlSubmitting ? "提交中..." : "提交链接"}
                   </button>
                 </form>
+              )}
+
+              {taskId && (
+                <div className="mt-5 bg-white border border-zinc-200 rounded-xl p-5 shadow-sm">
+                  <div className="flex items-center justify-between gap-4 mb-4">
+                    <div>
+                      <p className="font-medium text-zinc-800">准备开始转录</p>
+                      <p className="text-sm text-zinc-500 mt-1">
+                        当前模型：{asrProvider === "mimo" ? "MIMO-ASR" : "Whisper"}，可在上方切换后再启动。
+                      </p>
+                    </div>
+                    <span className="shrink-0 px-2.5 py-1 rounded-full bg-yellow-100 text-yellow-700 text-xs font-medium">
+                      待启动
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleStartTranscription(taskId)}
+                    disabled={starting}
+                    className="w-full px-5 py-3 bg-sky-400 hover:bg-sky-500 disabled:bg-zinc-300 disabled:cursor-not-allowed rounded-xl text-white font-semibold transition-colors"
+                  >
+                    {starting ? "启动中..." : "开始转录"}
+                  </button>
+                </div>
               )}
 
               {error && (
@@ -1339,27 +1477,30 @@ export default function Home() {
 
           {view === "upload" && phase === "processing" && (
             <div className="max-w-4xl mx-auto">
-              {/* Header card */}
-              <div className="bg-white border border-zinc-200 rounded-xl shadow-sm p-6 mb-6">
-                <div className="flex items-center justify-between mb-4">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-full bg-sky-100 flex items-center justify-center">
-                      <svg className="w-5 h-5 text-sky-400 animate-spin-slow" fill="none" viewBox="0 0 24 24">
+              {/* Compact processing header */}
+              <div className="mb-5">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="min-w-0">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <svg className="w-4 h-4 text-sky-500 animate-spin-slow shrink-0" fill="none" viewBox="0 0 24 24">
                         <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
                         <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
                       </svg>
-                    </div>
-                    <div>
-                      <h2 className="text-lg font-semibold text-zinc-800">
+                      <h2 className="min-w-0 truncate text-lg font-semibold text-zinc-800">
                         {currentStepLabel || "准备中..."}
                       </h2>
-                      {activeStep && steps[activeStep]?.message && (
-                        <p className="text-sm text-zinc-500 mt-0.5">{steps[activeStep].message}</p>
-                      )}
+                      <span className="rounded-md bg-sky-50 px-2 py-0.5 text-xs font-mono font-semibold text-sky-600 tabular-nums">
+                        {overallPct}%
+                      </span>
                     </div>
+                    {activeStep && steps[activeStep]?.message && (
+                      <p className="mt-1 text-sm text-zinc-500 truncate">
+                        {steps[activeStep].message}
+                      </p>
+                    )}
                   </div>
                   <div className="flex items-center gap-3">
-                    <span className="text-sm font-mono text-zinc-500 bg-zinc-100 px-2.5 py-1 rounded-md">
+                    <span className="text-sm font-mono text-zinc-500 tabular-nums">
                       {formatElapsed(elapsed)}
                     </span>
                     <button
@@ -1371,22 +1512,152 @@ export default function Home() {
                   </div>
                 </div>
 
-                {/* Overall progress bar */}
-                <div className="w-full bg-zinc-100 rounded-full h-2.5 overflow-hidden">
-                  <div
-                    className="animate-shimmer h-2.5 rounded-full transition-all duration-500 ease-out"
-                    style={{ width: `${overallPct}%` }}
-                  />
-                </div>
-                <div className="flex items-center justify-between mt-2">
-                  <span className="text-xs text-zinc-500">
-                    {completedSteps}/{STEPS.length} 步骤完成
-                  </span>
-                  <span className="text-xs font-mono font-semibold text-sky-400 tabular-nums">
-                    {overallPct}%
-                  </span>
+                <div className="mt-4">
+                  <div className="grid grid-cols-5 items-start gap-0">
+                    {STEPS.map((key, idx) => {
+                      const s = steps[key];
+                      const isActive = s?.status === "active";
+                      const isCompleted = s?.status === "completed";
+                      const isError = s?.status === "error";
+                      const isReached = isActive || isCompleted || isError;
+
+                      return (
+                        <div key={key} className="relative min-w-0">
+                          {idx > 0 && (
+                            <div className={`absolute left-0 right-1/2 top-3 h-0.5 ${
+                              isCompleted || isActive || isError ? "bg-emerald-300" : "bg-zinc-200"
+                            }`} />
+                          )}
+                          {idx < STEPS.length - 1 && (
+                            <div className={`absolute left-1/2 right-0 top-3 h-0.5 ${
+                              isCompleted ? "bg-emerald-300" : "bg-zinc-200"
+                            }`} />
+                          )}
+                          <div className="relative flex flex-col items-center gap-1.5 px-1">
+                            <span className={`flex h-6 w-6 items-center justify-center rounded-full border-2 text-[11px] font-semibold transition-colors ${
+                              isError
+                                ? "border-red-500 bg-red-500 text-white"
+                                : isCompleted
+                                  ? "border-emerald-500 bg-emerald-500 text-white"
+                                  : isActive
+                                    ? "border-sky-500 bg-white text-sky-600"
+                                    : "border-zinc-300 bg-white text-zinc-400"
+                            }`}>
+                              {isCompleted ? "✓" : isError ? "!" : idx + 1}
+                            </span>
+                            <span className={`max-w-full truncate text-center text-[11px] font-medium ${
+                              isError
+                                ? "text-red-600"
+                                : isReached
+                                  ? "text-zinc-700"
+                                  : "text-zinc-400"
+                            }`}>
+                              {STEP_LABELS[key]}
+                            </span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                  <div className="mt-2 flex items-center justify-between text-xs text-zinc-500">
+                    <span>{completedSteps}/{STEPS.length} 步骤完成</span>
+                    <span className="font-mono tabular-nums">总进度 {overallPct}%</span>
+                  </div>
                 </div>
               </div>
+
+              {/* Step progress cards */}
+              <section className="mb-6">
+                <div className="space-y-2">
+                  {STEPS.map((key) => {
+                    const s = steps[key];
+                    const isActive = s?.status === "active";
+                    const isCompleted = s?.status === "completed";
+                    const isError = s?.status === "error";
+                    const isPending = !s || s.status === "pending";
+                    const pct = isCompleted ? 100 : Math.max(0, Math.min(100, s?.progressPct ?? 0));
+                    const apiProgress = s?.apiProgress;
+
+                    return (
+                      <div key={key}>
+                        <div
+                          className={`border shadow-sm transition-all duration-300 ${
+                            isActive
+                              ? "rounded-xl border-sky-200 bg-white p-4 shadow-sky-100"
+                              : isCompleted
+                                ? "rounded-lg border-emerald-200 bg-emerald-50 px-3 py-2"
+                                : isError
+                                  ? "rounded-xl border-red-200 bg-white p-4"
+                                  : "rounded-lg border-zinc-200 bg-white px-3 py-2"
+                          }`}
+                        >
+                          <div className="flex items-start justify-between gap-4">
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2">
+                                <span className={`w-2 h-2 rounded-full shrink-0 ${
+                                  isActive ? "bg-sky-400 animate-pulse"
+                                  : isCompleted ? "bg-emerald-500"
+                                  : isError ? "bg-red-500"
+                                  : "bg-zinc-300"
+                                 }`} />
+                                <h3 className={`text-sm font-semibold ${
+                                  isActive ? "text-sky-700"
+                                  : isCompleted ? "text-emerald-700"
+                                  : isError ? "text-red-600"
+                                  : "text-zinc-500"
+                                }`}>
+                                  {STEP_LABELS[key]}
+                                </h3>
+                              </div>
+                              <p className="mt-1 text-xs text-zinc-500 truncate">
+                               {isActive ? (s.message || s.detail || "处理中...") : isCompleted ? (s.detail || "已完成") : isError ? "处理失败" : "等待上一步完成"}
+                              </p>
+                            </div>
+                            <span className={`shrink-0 text-xs font-mono font-semibold tabular-nums ${
+                              isError ? "text-red-500"
+                              : isCompleted ? "text-emerald-600"
+                              : isActive ? "text-sky-500"
+                              : "text-zinc-400"
+                            }`}>
+                              {isError ? "失败" : isCompleted ? "已完成" : isPending ? "等待" : `${pct}%`}
+                            </span>
+                          </div>
+
+                          {isActive && key === "transcribe" && apiProgress && apiProgress.total > 0 && (
+                            <div className="mt-3 rounded-lg bg-sky-50 px-3 py-2 text-xs text-sky-700">
+                              <div className="flex items-center justify-between gap-3">
+                                <span>转录模型 API 请求</span>
+                                <span className="font-mono font-semibold tabular-nums">
+                                  {apiProgress.completed}/{apiProgress.total}
+                                </span>
+                              </div>
+                              <p className="mt-1 text-sky-600/80">
+                                已完成 {apiProgress.completed} 次请求
+                                {apiProgress.current ? `，正在处理第 ${apiProgress.current} 次` : ""}
+                              </p>
+                            </div>
+                          )}
+
+                          {!isCompleted && (
+                            <div className="mt-3 h-2.5 w-full overflow-hidden rounded-full bg-zinc-100">
+                              <div
+                                className={`h-2.5 rounded-full transition-all duration-500 ease-out ${
+                                  isActive
+                                    ? "animate-shimmer"
+                                    : isError
+                                      ? "bg-red-500"
+                                      : "bg-zinc-200"
+                                }`}
+                                style={{ width: `${pct}%` }}
+                              />
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
 
               {/* Live transcript */}
               {transcript && (
@@ -1483,7 +1754,14 @@ export default function Home() {
                   </p>
                 </div>
                 <button
-                  onClick={() => { setPhase("upload"); setTaskId(null); doneStage.reset(); }}
+                  onClick={() => {
+                    setPhase("upload");
+                    setTaskId(null);
+                    setUploadedName("");
+                    setUrlInput("");
+                    setError("");
+                    doneStage.reset();
+                  }}
                   className="px-4 py-2 bg-zinc-200 hover:bg-zinc-300 rounded-lg text-sm transition-colors"
                 >
                   新建任务

@@ -15,7 +15,19 @@ class SSEManager:
         payload = {"event": event, "data": data}
         self._events[task_id].append(payload)
         if task_id in self._queues:
-            await self._queues[task_id].put(payload)
+            try:
+                # Use put_nowait to avoid blocking if queue is full
+                self._queues[task_id].put_nowait(payload)
+            except asyncio.QueueFull:
+                # If queue is full, drop oldest and add new
+                try:
+                    self._queues[task_id].get_nowait()
+                except asyncio.QueueEmpty:
+                    pass
+                try:
+                    self._queues[task_id].put_nowait(payload)
+                except asyncio.QueueFull:
+                    pass
 
     def get_events(self, task_id):
         return self._events.get(task_id, [])

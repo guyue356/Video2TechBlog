@@ -21,7 +21,7 @@
 
 **Video2TechBlog** 通过 AI 流水线自动将技术视频转化为结构化的中文技术博客，让视频知识变得**可搜索、可引用、可分享**。
 
-用户只需上传视频文件（或粘贴 Bilibili/YouTube 链接），系统自动完成：语音转录 → 章节划分 → 知识提取 → 博客生成，全程 SSE 实时推送进度，处理完成后支持多格式导出。
+用户上传视频文件（或粘贴 Bilibili/YouTube 链接）后，点击“开始转录”即可启动：语音转录 → 章节划分 → 知识提取 → 博客生成，全程 SSE 实时推送进度，处理完成后支持多格式导出。
 
 ---
 
@@ -144,11 +144,11 @@
 1. 检查 Conda、Node.js、ffmpeg 是否安装
 2. 创建 `video2techblog` Conda 环境（Python 3.10）
 3. 安装 Python 和 Node.js 依赖
-4. 在同一窗口启动后端（端口 8001）和前端（端口 3001）
+4. 在同一窗口启动后端（端口 8001）和前端（端口 3002）
 
 启动后访问：
 
-- **前端界面**：http://localhost:3001
+- **前端界面**：http://localhost:3002
 - **API 文档**：http://localhost:8001/docs
 
 ### 方式二：手动启动
@@ -210,7 +210,7 @@ WHISPER_LANGUAGE=zh
 .\start.ps1
 
 # 2. 打开浏览器
-# http://localhost:3001
+# http://localhost:3002
 
 # 3. 拖拽视频文件到上传区域，或粘贴 Bilibili/YouTube 链接
 # 4. 等待处理完成，查看生成的博客
@@ -222,7 +222,7 @@ WHISPER_LANGUAGE=zh
 
 ### 上传内容
 
-1. 打开 http://localhost:3001
+1. 打开 http://localhost:3002
 2. 选择输入方式：
    - **文件上传**：拖拽视频/音频文件到上传区域，或点击选择文件
    - **URL 链接**：粘贴 Bilibili、YouTube 等平台的视频链接
@@ -348,8 +348,10 @@ flowchart TD
     Input -->|音频文件| V2[POST /api/upload]
     Input -->|URL 链接| V3[POST /api/upload/url]
 
-    V1 & V2 & V3 --> Task[创建任务, 返回 task_id]
-    Task --> Connect[前端连接 SSE]
+    V1 & V2 & V3 --> Task[保存输入, 返回 task_id]
+    Task --> Launch[用户点击开始转录]
+    Launch --> APIStart[POST /api/task/id/start]
+    APIStart --> Connect[前端连接 SSE]
     Connect --> Step0
 
     subgraph Step0[Step 1: 输入适配]
@@ -569,7 +571,7 @@ Video2TechBlog/
 
 - **Prompt 注入防护**：所有 LLM Prompt 均包含安全指令，要求模型将数据标签内的内容视为原始数据，忽略其中的指令注入尝试
 - **文件安全**：上传文件按 task_id 隔离存储，避免文件名冲突和路径遍历
-- **CORS 策略**：仅允许 `http://localhost:3001` 访问后端 API
+- **CORS 策略**：仅允许 `http://localhost:3002` 访问后端 API
 - **数据隔离**：每个任务独立的 SSE 队列和事件历史，互不干扰
 
 ---
@@ -706,8 +708,9 @@ stateDiagram-v2
 
 | 方法 | 路径 | 说明 |
 | ---- | ---- | ---- |
-| `POST` | `/api/upload` | 上传视频/音频文件，启动处理流水线 |
-| `POST` | `/api/upload/url` | 提交 URL 链接，通过 yt-dlp 下载并处理 |
+| `POST` | `/api/upload` | 上传视频/音频文件，创建待启动任务 |
+| `POST` | `/api/upload/url` | 提交 URL 链接，创建待启动任务 |
+| `POST` | `/api/task/{id}/start` | 启动待处理任务的转录与博客生成流水线 |
 | `GET` | `/api/task/{id}/stream` | SSE 实时进度流 |
 | `GET` | `/api/task/{id}` | 查询任务状态 |
 | `POST` | `/api/task/{id}/cancel` | 取消任务 |

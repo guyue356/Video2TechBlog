@@ -26,6 +26,15 @@ _default_mimo_base_url = (
 MIMO_BASE_URL = os.getenv("MIMO_BASE_URL", _default_mimo_base_url)
 MIMO_ASR_MODEL = os.getenv("MIMO_ASR_MODEL", "mimo-v2.5-asr")
 MIMO_ASR_LANGUAGE = os.getenv("MIMO_ASR_LANGUAGE", os.getenv("WHISPER_LANGUAGE", "zh"))
+MIMO_ASR_CHUNK_SECONDS = int(os.getenv("MIMO_ASR_CHUNK_SECONDS", "180"))
+MIMO_ASR_MP3_BITRATE = os.getenv("MIMO_ASR_MP3_BITRATE", "32k")
+MIMO_ASR_CONCURRENCY = int(os.getenv("MIMO_ASR_CONCURRENCY", "3"))
+MIMO_ASR_TIMEOUT_SECONDS = int(os.getenv("MIMO_ASR_TIMEOUT_SECONDS", "90"))
+MIMO_ASR_MAX_ATTEMPTS = int(os.getenv("MIMO_ASR_MAX_ATTEMPTS", "2"))
+MIMO_ASR_HEARTBEAT_SECONDS = int(os.getenv("MIMO_ASR_HEARTBEAT_SECONDS", "10"))
+MIMO_ASR_FALLBACK_RETRY = os.getenv("MIMO_ASR_FALLBACK_RETRY", "0").lower() in {
+    "1", "true", "yes", "on"
+}
 WHISPER_MODEL_SIZE = "large-v3"
 def _detect_whisper_device():
     try:

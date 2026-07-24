@@ -1,25 +1,14 @@
 @echo off
 chcp 65001 >nul
-title Video2TechBlog - Stop Servers
 
-echo.
-echo ============================================
-echo   Stopping Video2TechBlog Servers
-echo ============================================
-echo.
-
-REM Kill processes on ports 8001 and 3001
-echo Stopping Backend (port 8001)...
-for /f "tokens=5" %%a in ('netstat -aon ^| findstr :8001 ^| findstr LISTENING') do (
-    taskkill /F /PID %%a >nul 2>&1
+REM Self-elevate to admin if not already
+net session >nul 2>&1
+if %errorlevel% neq 0 (
+    echo Requesting administrator privileges...
+    powershell -Command "Start-Process -FilePath 'powershell' -ArgumentList '-ExecutionPolicy Bypass -File \"%~dp0stop.ps1\"' -Verb RunAs"
+    exit /b
 )
 
-echo Stopping Frontend (port 3001)...
-for /f "tokens=5" %%a in ('netstat -aon ^| findstr :3001 ^| findstr LISTENING') do (
-    taskkill /F /PID %%a >nul 2>&1
-)
-
-echo.
-echo [Done] Servers stopped.
-echo.
+REM Already admin, run the stop script
+powershell -ExecutionPolicy Bypass -File "%~dp0stop.ps1"
 pause

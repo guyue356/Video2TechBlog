@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 
-const API_BASE = "http://localhost:8000";
+const API_BASE = "http://localhost:8001";
 
 interface PromptTemplate {
   id: string;
@@ -34,6 +34,7 @@ export default function PromptSettings({ open, onClose }: PromptSettingsProps) {
 
   useEffect(() => {
     if (!open) return;
+    const timer = window.setTimeout(() => {
     setLoading(true);
     fetch(`${API_BASE}/api/prompts`)
       .then((r) => r.json())
@@ -45,6 +46,8 @@ export default function PromptSettings({ open, onClose }: PromptSettingsProps) {
       })
       .catch(() => setMessage({ type: "err", text: "加载模板失败" }))
       .finally(() => setLoading(false));
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [open]);
 
   const handleSave = async (id: string) => {
@@ -77,7 +80,7 @@ export default function PromptSettings({ open, onClose }: PromptSettingsProps) {
     try {
       // Re-fetch from server (which merges defaults)
       const res = await fetch(`${API_BASE}/api/prompts/${id}`);
-      const data: PromptTemplate = await res.json();
+      await res.json();
       // Delete the DB entry by saving the default value back
       // Actually, we need a reset endpoint. For now, just inform the user.
       setMessage({ type: "ok", text: "请手动将模板内容替换为默认值后保存" });
@@ -87,6 +90,8 @@ export default function PromptSettings({ open, onClose }: PromptSettingsProps) {
       setSaving(false);
     }
   };
+
+  void handleReset;
 
   if (!open) return null;
 

@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 
-const API_BASE = "http://localhost:8000";
+const API_BASE = "http://localhost:8001";
 
 interface Preset {
   id: number;
@@ -40,14 +40,14 @@ export default function PresetSelector({ value, onChange, onManageClick, compact
     } finally {
       setLoading(false);
     }
-  }, []); // intentionally stable; value/onChange handled by caller
+  }, [onChange, value]);
 
   useEffect(() => {
-    fetchPresets();
+    const timer = window.setTimeout(() => {
+      fetchPresets();
+    }, 0);
+    return () => window.clearTimeout(timer);
   }, [fetchPresets]);
-
-  // Expose refresh for parent
-  const refresh = useCallback(() => fetchPresets(), [fetchPresets]);
 
   // Store refresh on a ref-like pattern via a global callback
   useEffect(() => {
